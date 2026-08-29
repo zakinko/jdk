@@ -52,7 +52,8 @@ endif
 # Create a dynamic list of symbols from the built object files. This is highly
 # platform dependent.
 
-ifeq ($(call isTargetOs, linux), true)
+# The BSDs other than macOS are ELF and read the same nm output linux does.
+ifeq ($(call isTargetOs, linux bsd), true)
   DUMP_SYMBOLS_CMD := $(NM) --defined-only *$(OBJ_SUFFIX)
   ifneq ($(FILTER_SYMBOLS_PATTERN), )
     FILTER_SYMBOLS_PATTERN := $(FILTER_SYMBOLS_PATTERN)|
