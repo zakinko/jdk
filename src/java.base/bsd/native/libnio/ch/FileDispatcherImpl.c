@@ -64,14 +64,6 @@ Java_sun_nio_ch_FileDispatcherImpl_transferTo0(JNIEnv *env, jobject this,
                                                jlong position, jlong count,
                                                jobject dstFDO, jboolean append)
 {
-    /*
-     * NetBSD and OpenBSD have no sendfile(2), and FreeBSD's takes a
-     * different argument list from the macOS one below.  Report the
-     * transfer as unsupported and let the shared code read and write.
-     */
-#if defined(__NetBSD__) || defined(__OpenBSD__)
-    return IOS_UNSUPPORTED;
-#else
     jint srcFD = fdval(env, srcFDO);
     jint dstFD = fdval(env, dstFDO);
 
@@ -80,6 +72,13 @@ Java_sun_nio_ch_FileDispatcherImpl_transferTo0(JNIEnv *env, jobject this,
 
     numBytes = count;
 
+    /*
+     * NetBSD and OpenBSD have no sendfile(2), and FreeBSD's takes a
+     * different argument list from the macOS one used here.
+     */
+#if defined(__NetBSD__) || defined(__OpenBSD__)
+    return IOS_UNSUPPORTED;
+#else
     result = sendfile(srcFD, dstFD, position, &numBytes, NULL, 0);
 
     if (numBytes > 0)
