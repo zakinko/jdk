@@ -164,8 +164,15 @@ Java_sun_nio_fs_BsdNativeDispatcher_fsstatEntry(JNIEnv* env, jclass this,
         options="ro";
     else
         options="";
+#ifdef ST_RDONLY
+    // struct statvfs keeps the two-word fsid in f_fsidx; its f_fsid is the
+    // POSIX unsigned long, which has no members.
+    fsid_val[0] = iter->buf[iter->pos].f_fsidx.__fsid_val[0];
+    fsid_val[1] = iter->buf[iter->pos].f_fsidx.__fsid_val[1];
+#else
     fsid_val[0] = iter->buf[iter->pos].f_fsid.val[0];
     fsid_val[1] = iter->buf[iter->pos].f_fsid.val[1];
+#endif
 
     iter->pos++;
 
