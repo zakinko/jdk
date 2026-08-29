@@ -61,7 +61,7 @@ ifeq ($(call isTargetOs, windows), true)
       #
 endif
 
-ifeq ($(call isTargetOs, linux macosx aix), true)
+ifeq ($(call isTargetOs, linux macosx aix bsd), true)
   LIBAWT_EXCLUDE_FILES += awt_Font.c CUPSfuncs.c fontpath.c X11Color.c
 endif
 
