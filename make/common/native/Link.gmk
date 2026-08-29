@@ -194,6 +194,13 @@ define CreateDynamicLibraryOrExecutable
 	            $$($1_OBJCOPY) --add-gnu-debuglink=$$($1_DEBUGINFO_FILES) $$($1_TARGET))
           endif
         endif
+        ifneq ($(PAXCTL), )
+          # NetBSD refuses a writable and executable mapping unless the binary
+          # says otherwise, and the JIT asks for one.  Without this every
+          # launcher stops at "Could not reserve enough space in CodeHeap".
+	  $$(call ExecuteWithLog, $$($1_OBJECT_DIR)/$$($1_SAFE_NAME)_paxctl, \
+	      $(PAXCTL) +m $$($1_TARGET))
+        endif
         ifneq ($(MACOSX_CODESIGN_MODE), disabled)
           # Remove signature explicitly first to avoid warnings if the linker
           # added a default adhoc signature.
