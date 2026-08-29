@@ -34,8 +34,10 @@
   #include <mach/task_info.h>
 #endif
 #ifdef __NetBSD__
-  // KERN_CP_TIME gives the same tick counters host_statistics() does on macOS.
+  // KERN_CP_TIME gives the same tick counters host_statistics() does on macOS;
+  // KERN_PROC2 is how a NetBSD userland walks the process table.
   #include <sys/sched.h>
+  #include <sys/param.h>
 #endif
 #include <sys/time.h>
 #include <sys/sysctl.h>
@@ -50,7 +52,7 @@ static const double NANOS_PER_SEC = 1000000000.0;
 class CPUPerformanceInterface::CPUPerformance : public CHeapObj<mtInternal> {
    friend class CPUPerformanceInterface;
  private:
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__NetBSD__)
   uint64_t _jvm_real;
   uint64_t _total_csr_nanos;
   uint64_t _jvm_user;
@@ -370,6 +372,55 @@ int SystemProcessInterface::SystemProcesses::system_processes(SystemProcess** sy
         }
       }
     }
+  }
+
+  *no_of_sys_processes = process_count;
+  *system_processes = next;
+
+  return OS_OK;
+#elif defined(__NetBSD__)
+  // KERN_PROC2 lists the processes; KERN_PROC_PATHNAME names each one.  The
+  // list is asked for twice, because it can grow between the sizing call and
+  // the fetch.
+  ResourceMark rm;
+  int mib[6] = { CTL_KERN, KERN_PROC2, KERN_PROC_ALL, 0,
+                 (int)sizeof(struct kinfo_proc2), 0 };
+  size_t len = 0;
+  if (sysctl(mib, 6, nullptr, &len, nullptr, 0) != 0 || len == 0) {
+    return OS_ERR;
+  }
+
+  int count = (int)(len / sizeof(struct kinfo_proc2));
+  mib[5] = count;
+  struct kinfo_proc2* procs = NEW_RESOURCE_ARRAY(struct kinfo_proc2, count);
+  if (sysctl(mib, 6, procs, &len, nullptr, 0) != 0) {
+    return OS_ERR;
+  }
+  count = (int)(len / sizeof(struct kinfo_proc2));
+
+  int process_count = 0;
+  SystemProcess* next = nullptr;
+  for (int i = 0; i < count; i++) {
+    pid_t pid = procs[i].p_pid;
+    if (pid == 0) {
+      continue;
+    }
+    char buffer[MAXPATHLEN];
+    size_t path_len = sizeof(buffer);
+    int name[4] = { CTL_KERN, KERN_PROC_ARGS, (int)pid, KERN_PROC_PATHNAME };
+    if (sysctl(name, 4, buffer, &path_len, nullptr, 0) != 0 || path_len == 0) {
+      // A process can go away between the listing and this call, and a
+      // kernel thread has no path at all.  Report what can be named.
+      continue;
+    }
+    SystemProcess* current = new SystemProcess();
+    char* path = NEW_C_HEAP_ARRAY(char, strlen(buffer) + 1, mtInternal);
+    strcpy(path, buffer);
+    current->set_path(path);
+    current->set_pid((int)pid);
+    current->set_next(next);
+    next = current;
+    process_count++;
   }
 
   *no_of_sys_processes = process_count;
