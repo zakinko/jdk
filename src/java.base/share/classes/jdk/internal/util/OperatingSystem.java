@@ -79,6 +79,11 @@ public enum OperatingSystem {
      * The AIX Operating system.
      */
     AIX,
+    /**
+     * The BSD operating systems other than macOS: FreeBSD, NetBSD, OpenBSD
+     * and DragonFly BSD.
+     */
+    BSD,
     ;
 
     // The current OperatingSystem
@@ -114,6 +119,15 @@ public enum OperatingSystem {
     @ForceInline
     public static boolean isAix() {
         return PlatformProps.TARGET_OS_IS_AIX;
+    }
+
+    /**
+     * {@return {@code true} if built for a BSD operating system other than
+     * macOS}
+     */
+    @ForceInline
+    public static boolean isBsd() {
+        return PlatformProps.TARGET_OS_IS_BSD;
     }
 
     /**
