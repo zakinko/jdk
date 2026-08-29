@@ -106,6 +106,10 @@
   #include <link.h>
 #endif
 
+#ifdef __NetBSD__
+  #include <uvm/uvm_extern.h>
+#endif
+
 #ifdef __FreeBSD__
   #include <pthread_np.h>
 #endif
@@ -214,6 +218,16 @@ bool os::total_swap_space(physical_memory_size_type& value) {
   return Machine::total_swap_space(value);
 }
 
+#ifdef __NetBSD__
+// vm.uvmexp2 carries the swap figures NetBSD has in place of macOS's
+// vm.swapusage; the counts are in pages.
+static bool netbsd_uvmexp(struct uvmexp_sysctl& uv) {
+  size_t size = sizeof(uv);
+  int mib[2] = { CTL_VM, VM_UVMEXP2 };
+  return sysctl(mib, 2, &uv, &size, nullptr, 0) == 0;
+}
+#endif
+
 bool os::Machine::total_swap_space(physical_memory_size_type& value) {
 #if defined(__APPLE__)
   struct xsw_usage vmusage;
@@ -222,6 +236,13 @@ bool os::Machine::total_swap_space(physical_memory_size_type& value) {
     return false;
   }
   value = static_cast<physical_memory_size_type>(vmusage.xsu_total);
+  return true;
+#elif defined(__NetBSD__)
+  struct uvmexp_sysctl uv;
+  if (!netbsd_uvmexp(uv)) {
+    return false;
+  }
+  value = static_cast<physical_memory_size_type>(uv.swpages) * uv.pagesize;
   return true;
 #else
   return false;
@@ -240,6 +261,14 @@ bool os::Machine::free_swap_space(physical_memory_size_type& value) {
     return false;
   }
   value = static_cast<physical_memory_size_type>(vmusage.xsu_avail);
+  return true;
+#elif defined(__NetBSD__)
+  struct uvmexp_sysctl uv;
+  if (!netbsd_uvmexp(uv)) {
+    return false;
+  }
+  value = static_cast<physical_memory_size_type>(uv.swpages - uv.swpginuse)
+          * uv.pagesize;
   return true;
 #else
   return false;
@@ -2768,6 +2797,9 @@ void os::print_open_file_descriptors(outputStream* st) {
 #ifdef __APPLE__
   char buf[1024 * sizeof(struct proc_fdinfo)];
   os::Bsd::print_open_file_descriptors(st, buf, sizeof(buf));
+#elif defined(__NetBSD__)
+  char buf[1024 * sizeof(struct kinfo_file)];
+  os::Bsd::print_open_file_descriptors(st, buf, sizeof(buf));
 #else
   st->print_cr("Open File Descriptors: unknown");
 #endif
@@ -2801,6 +2833,27 @@ void os::Bsd::print_open_file_descriptors(outputStream* st, char* buf, size_t bu
     return;
   }
   st->print_cr("Open File Descriptors: %d", nfiles);
+#elif defined(__NetBSD__)
+  // KERN_FILE2 with KERN_FILE_BYPID lists this process's open files; the mib
+  // carries the size of one entry and how many will fit.
+  size_t max_fds = buflen / sizeof(struct kinfo_file);
+  precond(max_fds >= 1);
+  struct kinfo_file* fds = reinterpret_cast<struct kinfo_file*>(buf);
+
+  int mib[6] = { CTL_KERN, KERN_FILE2, KERN_FILE_BYPID, (int)::getpid(),
+                 (int)sizeof(struct kinfo_file), (int)max_fds };
+  size_t len = buflen;
+  if (sysctl(mib, 6, fds, &len, nullptr, 0) != 0) {
+    st->print_cr("Open File Descriptors: unknown");
+    return;
+  }
+
+  size_t nfiles = len / sizeof(struct kinfo_file);
+  if (nfiles >= max_fds) {
+    st->print_cr("Open File Descriptors: > %zu", max_fds);
+    return;
+  }
+  st->print_cr("Open File Descriptors: %zu", nfiles);
 #else
   st->print_cr("Open File Descriptors: unknown");
 #endif
