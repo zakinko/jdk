@@ -903,6 +903,21 @@ pid_t os::Bsd::gettid() {
 
 // Returns the uid of a process or -1 on error.
 uid_t os::Bsd::get_process_uid(pid_t pid) {
+#ifdef __NetBSD__
+  // NetBSD declares struct kinfo_proc in <sys/sysctl.h> only under _KERNEL
+  // or _KMEMUSER, so it is an incomplete type here.  KERN_PROC2 returns
+  // struct kinfo_proc2 instead, which carries the uid directly rather than
+  // in a nested eproc.
+  struct kinfo_proc2 kp;
+  size_t size = sizeof kp;
+  int mib_kern[6] = {CTL_KERN, KERN_PROC2, KERN_PROC_PID, pid,
+                     (int)sizeof kp, 1};
+  if (sysctl(mib_kern, 6, &kp, &size, nullptr, 0) == 0) {
+    if (size > 0 && kp.p_pid == pid) {
+      return kp.p_uid;
+    }
+  }
+#else
   struct kinfo_proc kp;
   size_t size = sizeof kp;
   int mib_kern[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
@@ -911,6 +926,7 @@ uid_t os::Bsd::get_process_uid(pid_t pid) {
       return kp.kp_eproc.e_ucred.cr_uid;
     }
   }
+#endif
   return (uid_t)-1;
 }
 
