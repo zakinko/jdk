@@ -733,8 +733,9 @@ AC_DEFUN_ONCE([TOOLCHAIN_DETECT_TOOLCHAIN_EXTRA],
   fi
 
   # objcopy is used for moving debug symbols to separate files when
-  # full debug symbols are enabled.
-  if test "x$OPENJDK_TARGET_OS" = xlinux; then
+  # full debug symbols are enabled.  macOS uses dsymutil instead, but the
+  # other BSDs are ELF and take the same route as linux.
+  if test "x$OPENJDK_TARGET_OS" = xlinux || test "x$OPENJDK_TARGET_OS" = xbsd; then
     UTIL_LOOKUP_TOOLCHAIN_PROGS(OBJCOPY, gobjcopy objcopy)
   fi
 
