@@ -313,17 +313,24 @@ void os::Bsd::initialize_system_info() {
   // since it returns a 64 bit value)
   mib[0] = CTL_HW;
 
+// mem_val below is 64 bits wide, so the sysctl asked for has to be too.
+// HW_MEMSIZE and HW_PHYSMEM64 are; HW_PHYSMEM and HW_REALMEM return an int,
+// and sysctl(3) then writes only the low half, leaving whatever was in the
+// high half as part of the answer.
 #if defined (HW_MEMSIZE) // Apple
   mib[1] = HW_MEMSIZE;
-#elif defined(HW_PHYSMEM) // Most of BSD
-  mib[1] = HW_PHYSMEM;
+#elif defined(HW_PHYSMEM64) // NetBSD
+  mib[1] = HW_PHYSMEM64;
 #elif defined(HW_REALMEM) // Old FreeBSD
   mib[1] = HW_REALMEM;
+#elif defined(HW_PHYSMEM)
+  mib[1] = HW_PHYSMEM;
 #else
   #error No ways to get physmem
 #endif
 
   len = sizeof(mem_val);
+  mem_val = 0;
   if (sysctl(mib, 2, &mem_val, &len, nullptr, 0) != -1) {
     assert(len == sizeof(mem_val), "unexpected data size");
     _physical_memory = static_cast<physical_memory_size_type>(mem_val);
