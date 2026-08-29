@@ -40,6 +40,7 @@ VALID_TOOLCHAINS_all="gcc clang microsoft"
 # These toolchains are valid on different platforms
 VALID_TOOLCHAINS_linux="gcc clang"
 VALID_TOOLCHAINS_macosx="clang"
+VALID_TOOLCHAINS_bsd="gcc clang"
 VALID_TOOLCHAINS_aix="clang"
 VALID_TOOLCHAINS_windows="microsoft"
 
