@@ -245,7 +245,12 @@ Java_com_sun_management_internal_OperatingSystemImpl_getTotalMemorySize0
     size_t rlen;
 
     mib[0] = CTL_HW;
+    // macOS spells this HW_MEMSIZE; the other BSDs HW_PHYSMEM64.
+#ifdef HW_MEMSIZE
     mib[1] = HW_MEMSIZE;
+#else
+    mib[1] = HW_PHYSMEM64;
+#endif
     rlen = sizeof(result);
     if (sysctl(mib, 2, &result, &rlen, NULL, 0) != 0) {
         throw_internal_error(env, "sysctl failed");
