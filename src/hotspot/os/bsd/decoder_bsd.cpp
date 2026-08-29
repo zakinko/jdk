@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2018, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,14 +29,12 @@
 
 #include "jvm.h"
 #include "utilities/decoder_elf.hpp"
-#include "utilities/globalDefinitions.hpp"
-#include "utilities/permitForbiddenFunctions.hpp"
-
 #include <cxxabi.h>
 
 bool ElfDecoder::demangle(const char* symbol, char *buf, int buflen) {
   int   status;
   char* result;
+  size_t size = (size_t)buflen;
 
 #ifdef PPC64
   // On PPC64 ElfDecoder::decode() may return a dot (.) prefixed name
@@ -47,11 +45,11 @@ bool ElfDecoder::demangle(const char* symbol, char *buf, int buflen) {
   // Don't pass buf to __cxa_demangle. In case of the 'buf' is too small,
   // __cxa_demangle will call system "realloc" for additional memory, which
   // may use different malloc/realloc mechanism that allocates 'buf'.
-  if ((result = abi::__cxa_demangle(symbol, nullptr, nullptr, &status)) != nullptr) {
+  if ((result = abi::__cxa_demangle(symbol, NULL, NULL, &status)) != NULL) {
     jio_snprintf(buf, buflen, "%s", result);
-    // call c library's free
-    permit_forbidden_function::free(result);
-    return true;
+      // call c library's free
+      ::free(result);
+      return true;
   }
   return false;
 }
