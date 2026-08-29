@@ -48,19 +48,11 @@ Java_sun_nio_ch_FileDispatcherImpl_force0(JNIEnv *env, jobject this,
     jint fd = fdval(env, fdo);
     int result = 0;
 
-    result = fcntl(fd, F_FULLFSYNC);
-    if (result == -1) {
-        struct statfs fbuf;
-        int errno_fcntl = errno;
-        if (fstatfs(fd, &fbuf) == 0) {
-            if ((fbuf.f_flags & MNT_LOCAL) == 0) {
-                /* Try fsync() in case file is not local. */
-                result = fsync(fd);
-            }
-        } else {
-            /* fstatfs() failed so restore errno from fcntl(). */
-            errno = errno_fcntl;
-        }
+    /* F_FULLFSYNC is a macOS extension; see macosx for that path. */
+    if (md == JNI_FALSE) {
+        result = fdatasync(fd);
+    } else {
+        result = fsync(fd);
     }
 
     return handle(env, result, "Force failed");
@@ -72,6 +64,14 @@ Java_sun_nio_ch_FileDispatcherImpl_transferTo0(JNIEnv *env, jobject this,
                                                jlong position, jlong count,
                                                jobject dstFDO, jboolean append)
 {
+    /*
+     * NetBSD and OpenBSD have no sendfile(2), and FreeBSD's takes a
+     * different argument list from the macOS one below.  Report the
+     * transfer as unsupported and let the shared code read and write.
+     */
+#if defined(__NetBSD__) || defined(__OpenBSD__)
+    return IOS_UNSUPPORTED;
+#else
     jint srcFD = fdval(env, srcFDO);
     jint dstFD = fdval(env, dstFDO);
 
@@ -99,4 +99,5 @@ Java_sun_nio_ch_FileDispatcherImpl_transferTo0(JNIEnv *env, jobject this,
     }
 
     return result;
+#endif
 }
