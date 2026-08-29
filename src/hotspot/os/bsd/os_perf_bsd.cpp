@@ -31,15 +31,15 @@
 
 #ifdef __APPLE__
   #import <libproc.h>
-  #include <sys/time.h>
-  #include <sys/sysctl.h>
   #include <mach/mach.h>
   #include <mach/task_info.h>
-  #include <sys/socket.h>
-  #include <net/if.h>
-  #include <net/if_dl.h>
-  #include <net/route.h>
 #endif
+#include <sys/time.h>
+#include <sys/sysctl.h>
+#include <sys/socket.h>
+#include <net/if.h>
+#include <net/if_dl.h>
+#include <net/route.h>
 
 static const double NANOS_PER_SEC = 1000000000.0;
 
@@ -426,7 +426,17 @@ NetworkPerformanceInterface::NetworkPerformance::~NetworkPerformance() {
 
 int NetworkPerformanceInterface::NetworkPerformance::network_utilization(NetworkInterface** network_interfaces) const {
   size_t len;
-  int mib[] = {CTL_NET, PF_ROUTE, /* protocol number */ 0, /* address family */ 0, NET_RT_IFLIST2, /* NET_RT_FLAGS mask*/ 0};
+  // NET_RT_IFLIST2 and RTM_IFINFO2 are macOS extensions. The BSDs carry the
+  // same counters in the base NET_RT_IFLIST listing, in struct if_msghdr
+  // itself rather than in the larger if_msghdr2 that follows it there.
+#ifdef __APPLE__
+  const int iflist_op = NET_RT_IFLIST2;
+  const int ifinfo_type = RTM_IFINFO2;
+#else
+  const int iflist_op = NET_RT_IFLIST;
+  const int ifinfo_type = RTM_IFINFO;
+#endif
+  int mib[] = {CTL_NET, PF_ROUTE, /* protocol number */ 0, /* address family */ 0, iflist_op, /* NET_RT_FLAGS mask*/ 0};
   if (sysctl(mib, sizeof(mib) / sizeof(mib[0]), NULL, &len, NULL, 0) != 0) {
     return OS_ERR;
   }
@@ -441,12 +451,16 @@ int NetworkPerformanceInterface::NetworkPerformance::network_utilization(Network
     if_msghdr* msghdr = reinterpret_cast<if_msghdr*>(buf + index);
     index += msghdr->ifm_msglen;
 
-    if (msghdr->ifm_type != RTM_IFINFO2) {
+    if (msghdr->ifm_type != ifinfo_type) {
       continue;
     }
 
+#ifdef __APPLE__
     if_msghdr2* msghdr2 = reinterpret_cast<if_msghdr2*>(msghdr);
     sockaddr_dl* sockaddr = reinterpret_cast<sockaddr_dl*>(msghdr2 + 1);
+#else
+    sockaddr_dl* sockaddr = reinterpret_cast<sockaddr_dl*>(msghdr + 1);
+#endif
 
     // The interface name is not necessarily NUL-terminated
     char name_buf[128];
@@ -454,8 +468,13 @@ int NetworkPerformanceInterface::NetworkPerformance::network_utilization(Network
     strncpy(name_buf, sockaddr->sdl_data, name_len);
     name_buf[name_len] = '\0';
 
+#ifdef __APPLE__
     uint64_t bytes_in = msghdr2->ifm_data.ifi_ibytes;
     uint64_t bytes_out = msghdr2->ifm_data.ifi_obytes;
+#else
+    uint64_t bytes_in = msghdr->ifm_data.ifi_ibytes;
+    uint64_t bytes_out = msghdr->ifm_data.ifi_obytes;
+#endif
 
     NetworkInterface* cur = new NetworkInterface(name_buf, bytes_in, bytes_out, ret);
     ret = cur;
