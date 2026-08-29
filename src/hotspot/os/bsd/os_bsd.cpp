@@ -76,7 +76,9 @@
 # include <fcntl.h>
 # include <fenv.h>
 # include <inttypes.h>
+#ifdef __APPLE__
 # include <mach/mach.h>
+#endif
 # include <poll.h>
 # include <pthread.h>
 # include <pwd.h>
