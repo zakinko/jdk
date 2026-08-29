@@ -30,11 +30,9 @@
 #include <signal.h>
 
 void OSThread::pd_initialize() {
-#ifdef __APPLE__
+  // thread_id_t is a mach thread_t on macOS and a pid_t elsewhere; both are
+  // integers, and the nullptr this used off macOS does not compile there.
   _thread_id        = 0;
-#else
-  _thread_id        = nullptr;
-#endif
   _unique_thread_id = 0;
   _pthread_id       = nullptr;
   _siginfo          = nullptr;
