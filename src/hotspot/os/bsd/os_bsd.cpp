@@ -1117,6 +1117,10 @@ void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
   if (result != nullptr) {
     return result;
   }
+  const char* error_report = ::dlerror();
+  if (error_report == nullptr) {
+    error_report = "dlerror returned no error description";
+  }
 
   Events::log_dll_message(nullptr, "Loading shared library %s failed, %s", filename, error_report);
   log_info(os)("shared library load of %s failed, %s", filename, error_report);
