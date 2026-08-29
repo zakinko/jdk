@@ -1561,14 +1561,19 @@ void os::pd_print_cpu_info(outputStream* st, char* buf, size_t buflen) {
 }
 
 void os::get_summary_cpu_info(char* buf, size_t buflen) {
-  unsigned int mhz;
-  size_t size = sizeof(mhz);
+  size_t size;
+  // HW_CPU_FREQ is a macOS extension.  Elsewhere keep the value the
+  // failing sysctl would have left behind, which callers can divide by.
+  unsigned int mhz = 1;
+#ifdef __APPLE__
+  size = sizeof(mhz);
   int mib[] = { CTL_HW, HW_CPU_FREQ };
   if (sysctl(mib, 2, &mhz, &size, nullptr, 0) < 0) {
     mhz = 1;  // looks like an error but can be divided by
   } else {
     mhz /= 1000000;  // reported in millions
   }
+#endif
 
   char model[100];
   size = sizeof(model);
