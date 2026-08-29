@@ -1603,9 +1603,6 @@ void os::get_summary_cpu_info(char* buf, size_t buflen) {
 }
 
 void os::print_memory_info(outputStream* st) {
-  xsw_usage swap_usage;
-  size_t size = sizeof(swap_usage);
-
   st->print("Memory:");
   st->print(" %zuk page", os::vm_page_size()>>10);
   physical_memory_size_type phys_mem = os::physical_memory();
@@ -1616,6 +1613,11 @@ void os::print_memory_info(outputStream* st) {
   st->print("(" PHYS_MEM_TYPE_FORMAT "k free)",
             avail_mem >> 10);
 
+#ifdef __APPLE__
+  // struct xsw_usage and the vm.swapusage sysctl are macOS extensions; the
+  // BSDs have neither, and leave the swap figures out of the line.
+  xsw_usage swap_usage;
+  size_t size = sizeof(swap_usage);
   if((sysctlbyname("vm.swapusage", &swap_usage, &size, nullptr, 0) == 0) || (errno == ENOMEM)) {
     if (size >= offset_of(xsw_usage, xsu_used)) {
       st->print(", swap " UINT64_FORMAT "k",
@@ -1624,6 +1626,7 @@ void os::print_memory_info(outputStream* st) {
                 ((julong) swap_usage.xsu_avail) >> 10);
     }
   }
+#endif
 
   st->cr();
 }
