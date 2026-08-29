@@ -33,6 +33,10 @@
   #include <mach/mach.h>
   #include <mach/task_info.h>
 #endif
+#ifdef __NetBSD__
+  // KERN_CP_TIME gives the same tick counters host_statistics() does on macOS.
+  #include <sys/sched.h>
+#endif
 #include <sys/time.h>
 #include <sys/sysctl.h>
 #include <sys/socket.h>
@@ -85,7 +89,7 @@ class CPUPerformanceInterface::CPUPerformance : public CHeapObj<mtInternal> {
 };
 
 CPUPerformanceInterface::CPUPerformance::CPUPerformance() {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__NetBSD__)
   _jvm_real = 0;
   _total_csr_nanos= 0;
   _jvm_context_switches = 0;
@@ -122,6 +126,39 @@ int CPUPerformanceInterface::CPUPerformance::cpu_load_total_process(double* cpu_
 
   long used_ticks  = cpu_load_info.cpu_ticks[CPU_STATE_USER] + cpu_load_info.cpu_ticks[CPU_STATE_NICE] + cpu_load_info.cpu_ticks[CPU_STATE_SYSTEM];
   long total_ticks = used_ticks + cpu_load_info.cpu_ticks[CPU_STATE_IDLE];
+
+  if (_used_ticks == 0 || _total_ticks == 0) {
+    // First call, just set the values
+    _used_ticks  = used_ticks;
+    _total_ticks = total_ticks;
+    return OS_ERR;
+  }
+
+  long used_delta  = used_ticks - _used_ticks;
+  long total_delta = total_ticks - _total_ticks;
+
+  _used_ticks  = used_ticks;
+  _total_ticks = total_ticks;
+
+  if (total_delta == 0) {
+    // Avoid division by zero
+    return OS_ERR;
+  }
+
+  *cpu_load = (double)used_delta / total_delta;
+
+  return OS_OK;
+#elif defined(__NetBSD__)
+  uint64_t cp_time[CPUSTATES];
+  size_t len = sizeof(cp_time);
+  int mib[2] = { CTL_KERN, KERN_CP_TIME };
+  if (sysctl(mib, 2, cp_time, &len, nullptr, 0) != 0) {
+    return OS_ERR;
+  }
+
+  long used_ticks  = (long)(cp_time[CP_USER] + cp_time[CP_NICE] + cp_time[CP_SYS]
+                            + cp_time[CP_INTR]);
+  long total_ticks = used_ticks + (long)cp_time[CP_IDLE];
 
   if (_used_ticks == 0 || _total_ticks == 0) {
     // First call, just set the values
