@@ -1,0 +1,58 @@
+name: macos-check
+
+# NetBSD のために入れた直しが macOS を壊していないかを見る。
+#
+# src/hotspot/os/bsd は macOS と BSD が共有していて、今回の直しはそこに集中して
+# いる。上流に出すときに必ず問われるので、同じ branch を macOS でも建てておく。
+# 手元の Mac は CommandLineTools しか無く JDK の configure が拒むが、GitHub の
+# runner には Xcode が入っている。
+on:
+  push:
+    branches: [netbsd-amd64-ci, netbsd-amd64-25-ci]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: boot JDK (28 EA) を置く
+        run: |
+          curl -fsSL -o jdk28.tar.gz \
+            https://download.java.net/java/early_access/jdk28/13/GPL/openjdk-28-ea+13_macos-aarch64_bin.tar.gz
+          mkdir -p /tmp/jdk28 && tar xzf jdk28.tar.gz -C /tmp/jdk28 --strip-components=1
+          ls /tmp/jdk28
+          /tmp/jdk28/Contents/Home/bin/java -version || /tmp/jdk28/bin/java -version
+
+      - name: 道具
+        run: brew install autoconf
+
+      - name: configure
+        run: |
+          B=/tmp/jdk28/Contents/Home
+          [ -d "$B" ] || B=/tmp/jdk28
+          bash configure --with-boot-jdk="$B" \
+            --disable-warnings-as-errors --with-jobs=3 \
+            > /tmp/conf.log 2>&1 || { tail -25 /tmp/conf.log; exit 1; }
+          grep -E "Toolchain|Target|Boot JDK" /tmp/conf.log | head -5
+
+      - name: hotspot を建てる
+        run: |
+          set +e
+          make hotspot > /tmp/build.log 2>&1
+          rc=$?
+          echo "make hotspot exit=$rc"
+          if [ $rc -ne 0 ]; then
+            grep -m1 -B15 "Error 1\|error:" /tmp/build.log | tail -20
+            exit 1
+          fi
+          echo "macOS でも建った"
