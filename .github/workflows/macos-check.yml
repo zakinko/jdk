@@ -30,17 +30,17 @@ jobs:
           curl -fsSL -o jdk28.tar.gz \
             https://download.java.net/java/early_access/jdk28/13/GPL/openjdk-28-ea+13_macos-aarch64_bin.tar.gz
           mkdir -p /tmp/jdk28 && tar xzf jdk28.tar.gz -C /tmp/jdk28 --strip-components=1
-          ls /tmp/jdk28
-          /tmp/jdk28/Contents/Home/bin/java -version || /tmp/jdk28/bin/java -version
+          # macOS の配布物は jdk-28.jdk/Contents/Home の下に入る
+          BOOT=$(dirname "$(dirname "$(find /tmp/jdk28 -name java -type f -path '*/bin/*' | head -1)")")
+          echo "BOOT_JDK=$BOOT" >> "$GITHUB_ENV"
+          "$BOOT/bin/java" -version
 
       - name: 道具
         run: brew install autoconf
 
       - name: configure
         run: |
-          B=/tmp/jdk28/Contents/Home
-          [ -d "$B" ] || B=/tmp/jdk28
-          bash configure --with-boot-jdk="$B" \
+          bash configure --with-boot-jdk="$BOOT_JDK" \
             --disable-warnings-as-errors --with-jobs=3 \
             > /tmp/conf.log 2>&1 || { tail -25 /tmp/conf.log; exit 1; }
           grep -E "Toolchain|Target|Boot JDK" /tmp/conf.log | head -5
