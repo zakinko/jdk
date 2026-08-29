@@ -97,6 +97,8 @@
 
 #if defined(__FreeBSD__) || defined(__NetBSD__)
   #include <elf.h>
+  // Link_map lives in <link_elf.h>, which <link.h> pulls in.
+  #include <link.h>
 #endif
 
 #ifdef __APPLE__
