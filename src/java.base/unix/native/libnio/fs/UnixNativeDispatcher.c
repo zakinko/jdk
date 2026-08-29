@@ -1396,9 +1396,9 @@ Java_sun_nio_fs_UnixNativeDispatcher_fgetxattr0(JNIEnv* env, jclass clazz,
     const char* name = jlong_to_ptr(nameAddress);
     void* value = jlong_to_ptr(valueAddress);
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__NetBSD__)
     res = fgetxattr(fd, name, value, valueLen);
-#elif defined(_ALLBSD_SOURCE)
+#elif defined(__APPLE__)
     res = fgetxattr(fd, name, value, valueLen, 0, 0);
 #elif defined(_AIX)
     res = fgetea(fd, name, value, valueLen);
@@ -1419,9 +1419,9 @@ Java_sun_nio_fs_UnixNativeDispatcher_fsetxattr0(JNIEnv* env, jclass clazz,
     const char* name = jlong_to_ptr(nameAddress);
     void* value = jlong_to_ptr(valueAddress);
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__NetBSD__)
     res = fsetxattr(fd, name, value, valueLen, 0);
-#elif defined(_ALLBSD_SOURCE)
+#elif defined(__APPLE__)
     res = fsetxattr(fd, name, value, valueLen, 0, 0);
 #elif defined(_AIX)
     res = fsetea(fd, name, value, valueLen, 0);
@@ -1440,9 +1440,9 @@ Java_sun_nio_fs_UnixNativeDispatcher_fremovexattr0(JNIEnv* env, jclass clazz,
     int res = -1;
     const char* name = jlong_to_ptr(nameAddress);
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__NetBSD__)
     res = fremovexattr(fd, name);
-#elif defined(_ALLBSD_SOURCE)
+#elif defined(__APPLE__)
     res = fremovexattr(fd, name, 0);
 #elif defined(_AIX)
     res = fremoveea(fd, name);
@@ -1461,9 +1461,9 @@ Java_sun_nio_fs_UnixNativeDispatcher_flistxattr(JNIEnv* env, jclass clazz,
     size_t res = -1;
     char* list = jlong_to_ptr(listAddress);
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__NetBSD__)
     res = flistxattr(fd, list, (size_t)size);
-#elif defined(_ALLBSD_SOURCE)
+#elif defined(__APPLE__)
     res = flistxattr(fd, list, (size_t)size, 0);
 #elif defined(_AIX)
     res = flistea(fd, list, (size_t)size);
