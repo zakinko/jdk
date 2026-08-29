@@ -106,6 +106,10 @@
   #include <link.h>
 #endif
 
+#ifdef __NetBSD__
+  #include <uvm/uvm_extern.h>
+#endif
+
 #ifdef __FreeBSD__
   #include <pthread_np.h>
 #endif
@@ -214,6 +218,16 @@ bool os::total_swap_space(physical_memory_size_type& value) {
   return Machine::total_swap_space(value);
 }
 
+#ifdef __NetBSD__
+// vm.uvmexp2 carries the swap figures NetBSD has in place of macOS's
+// vm.swapusage; the counts are in pages.
+static bool netbsd_uvmexp(struct uvmexp_sysctl& uv) {
+  size_t size = sizeof(uv);
+  int mib[2] = { CTL_VM, VM_UVMEXP2 };
+  return sysctl(mib, 2, &uv, &size, nullptr, 0) == 0;
+}
+#endif
+
 bool os::Machine::total_swap_space(physical_memory_size_type& value) {
 #if defined(__APPLE__)
   struct xsw_usage vmusage;
@@ -222,6 +236,13 @@ bool os::Machine::total_swap_space(physical_memory_size_type& value) {
     return false;
   }
   value = static_cast<physical_memory_size_type>(vmusage.xsu_total);
+  return true;
+#elif defined(__NetBSD__)
+  struct uvmexp_sysctl uv;
+  if (!netbsd_uvmexp(uv)) {
+    return false;
+  }
+  value = static_cast<physical_memory_size_type>(uv.swpages) * uv.pagesize;
   return true;
 #else
   return false;
@@ -240,6 +261,14 @@ bool os::Machine::free_swap_space(physical_memory_size_type& value) {
     return false;
   }
   value = static_cast<physical_memory_size_type>(vmusage.xsu_avail);
+  return true;
+#elif defined(__NetBSD__)
+  struct uvmexp_sysctl uv;
+  if (!netbsd_uvmexp(uv)) {
+    return false;
+  }
+  value = static_cast<physical_memory_size_type>(uv.swpages - uv.swpginuse)
+          * uv.pagesize;
   return true;
 #else
   return false;
@@ -313,17 +342,24 @@ void os::Bsd::initialize_system_info() {
   // since it returns a 64 bit value)
   mib[0] = CTL_HW;
 
+// mem_val below is 64 bits wide, so the sysctl asked for has to be too.
+// HW_MEMSIZE and HW_PHYSMEM64 are; HW_PHYSMEM and HW_REALMEM return an int,
+// and sysctl(3) then writes only the low half, leaving whatever was in the
+// high half as part of the answer.
 #if defined (HW_MEMSIZE) // Apple
   mib[1] = HW_MEMSIZE;
-#elif defined(HW_PHYSMEM) // Most of BSD
-  mib[1] = HW_PHYSMEM;
+#elif defined(HW_PHYSMEM64) // NetBSD
+  mib[1] = HW_PHYSMEM64;
 #elif defined(HW_REALMEM) // Old FreeBSD
   mib[1] = HW_REALMEM;
+#elif defined(HW_PHYSMEM)
+  mib[1] = HW_PHYSMEM;
 #else
   #error No ways to get physmem
 #endif
 
   len = sizeof(mem_val);
+  mem_val = 0;
   if (sysctl(mib, 2, &mem_val, &len, nullptr, 0) != -1) {
     assert(len == sizeof(mem_val), "unexpected data size");
     _physical_memory = static_cast<physical_memory_size_type>(mem_val);
@@ -425,14 +461,16 @@ void os::init_system_properties_values() {
     }
     Arguments::set_dll_dir(buf);
 
+    // The layout is <java_home>/lib/<variant>/libjvm.so.  It was
+    // <java_home>/jre/lib/<arch>/<variant>/libjvm.so until the modules came
+    // in, and the extra /<arch> strip below outlived that layout: it left
+    // java_home one directory too high, and the VM then stopped with
+    // "Failed setting boot class path".  Nothing noticed because macOS takes
+    // the branch above.
     if (pslash != nullptr) {
       pslash = strrchr(buf, '/');
       if (pslash != nullptr) {
-        *pslash = '\0';          // Get rid of /<arch>.
-        pslash = strrchr(buf, '/');
-        if (pslash != nullptr) {
-          *pslash = '\0';        // Get rid of /lib.
-        }
+        *pslash = '\0';          // Get rid of /lib.
       }
     }
     Arguments::set_java_home(buf);
@@ -2446,12 +2484,28 @@ int os::open(const char *path, int oflag, int mode) {
 // current_thread_cpu_time() and thread_cpu_time(Thread*) returns
 // the fast estimate available on the platform.
 
+#ifndef __APPLE__
+// The BSDs have no mach thread_info(); pthread_getcpuclockid(3) gives a
+// per-thread CPU clock instead.  It does not separate user from system time,
+// so both callers get the total.
+static jlong bsd_thread_cpu_time(pthread_t tid) {
+  clockid_t clockid;
+  struct timespec tp;
+  if (pthread_getcpuclockid(tid, &clockid) != 0) {
+    return -1;
+  }
+  if (clock_gettime(clockid, &tp) != 0) {
+    return -1;
+  }
+  return jlong(tp.tv_sec) * NANOSECS_PER_SEC + jlong(tp.tv_nsec);
+}
+#endif
+
 jlong os::current_thread_cpu_time() {
 #ifdef __APPLE__
   return os::thread_cpu_time(Thread::current(), true /* user + sys */);
 #else
-  Unimplemented();
-  return 0;
+  return bsd_thread_cpu_time(::pthread_self());
 #endif
 }
 
@@ -2459,8 +2513,7 @@ jlong os::thread_cpu_time(Thread* thread) {
 #ifdef __APPLE__
   return os::thread_cpu_time(thread, true /* user + sys */);
 #else
-  Unimplemented();
-  return 0;
+  return bsd_thread_cpu_time(thread->osthread()->pthread_id());
 #endif
 }
 
@@ -2468,8 +2521,7 @@ jlong os::current_thread_cpu_time(bool user_sys_cpu_time) {
 #ifdef __APPLE__
   return os::thread_cpu_time(Thread::current(), user_sys_cpu_time);
 #else
-  Unimplemented();
-  return 0;
+  return bsd_thread_cpu_time(::pthread_self());
 #endif
 }
 
@@ -2495,8 +2547,7 @@ jlong os::thread_cpu_time(Thread *thread, bool user_sys_cpu_time) {
     return ((jlong)tinfo.user_time.seconds * 1000000000) + ((jlong)tinfo.user_time.microseconds * (jlong)1000);
   }
 #else
-  Unimplemented();
-  return 0;
+  return bsd_thread_cpu_time(thread->osthread()->pthread_id());
 #endif
 }
 
@@ -2516,11 +2567,9 @@ void os::thread_cpu_time_info(jvmtiTimerInfo *info_ptr) {
 }
 
 bool os::is_thread_cpu_time_supported() {
-#ifdef __APPLE__
+  // macOS answers through mach thread_info(); the other BSDs through
+  // pthread_getcpuclockid(3).  G1 refuses to start without this.
   return true;
-#else
-  return false;
-#endif
 }
 
 // System loadavg support.  Returns -1 if load average cannot be obtained.
@@ -2748,6 +2797,9 @@ void os::print_open_file_descriptors(outputStream* st) {
 #ifdef __APPLE__
   char buf[1024 * sizeof(struct proc_fdinfo)];
   os::Bsd::print_open_file_descriptors(st, buf, sizeof(buf));
+#elif defined(__NetBSD__)
+  char buf[1024 * sizeof(struct kinfo_file)];
+  os::Bsd::print_open_file_descriptors(st, buf, sizeof(buf));
 #else
   st->print_cr("Open File Descriptors: unknown");
 #endif
@@ -2781,6 +2833,27 @@ void os::Bsd::print_open_file_descriptors(outputStream* st, char* buf, size_t bu
     return;
   }
   st->print_cr("Open File Descriptors: %d", nfiles);
+#elif defined(__NetBSD__)
+  // KERN_FILE2 with KERN_FILE_BYPID lists this process's open files; the mib
+  // carries the size of one entry and how many will fit.
+  size_t max_fds = buflen / sizeof(struct kinfo_file);
+  precond(max_fds >= 1);
+  struct kinfo_file* fds = reinterpret_cast<struct kinfo_file*>(buf);
+
+  int mib[6] = { CTL_KERN, KERN_FILE2, KERN_FILE_BYPID, (int)::getpid(),
+                 (int)sizeof(struct kinfo_file), (int)max_fds };
+  size_t len = buflen;
+  if (sysctl(mib, 6, fds, &len, nullptr, 0) != 0) {
+    st->print_cr("Open File Descriptors: unknown");
+    return;
+  }
+
+  size_t nfiles = len / sizeof(struct kinfo_file);
+  if (nfiles >= max_fds) {
+    st->print_cr("Open File Descriptors: > %zu", max_fds);
+    return;
+  }
+  st->print_cr("Open File Descriptors: %zu", nfiles);
 #else
   st->print_cr("Open File Descriptors: unknown");
 #endif

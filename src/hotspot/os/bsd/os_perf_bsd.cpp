@@ -33,6 +33,13 @@
   #include <mach/mach.h>
   #include <mach/task_info.h>
 #endif
+#ifdef __NetBSD__
+  // KERN_CP_TIME gives the same tick counters host_statistics() does on macOS;
+  // KERN_PROC2 is how a NetBSD userland walks the process table.
+  #include <sys/sched.h>
+  #include <sys/param.h>
+  #include <sys/resource.h>
+#endif
 #include <sys/time.h>
 #include <sys/sysctl.h>
 #include <sys/socket.h>
@@ -46,7 +53,7 @@ static const double NANOS_PER_SEC = 1000000000.0;
 class CPUPerformanceInterface::CPUPerformance : public CHeapObj<mtInternal> {
    friend class CPUPerformanceInterface;
  private:
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__NetBSD__)
   uint64_t _jvm_real;
   uint64_t _total_csr_nanos;
   uint64_t _jvm_user;
@@ -55,6 +62,9 @@ class CPUPerformanceInterface::CPUPerformance : public CHeapObj<mtInternal> {
   long _used_ticks;
   long _total_ticks;
   int  _active_processor_count;
+  uint64_t* _cpu_used_ticks;
+  uint64_t* _cpu_total_ticks;
+  int _cpu_tick_count;
 
   bool now_in_nanos(uint64_t* resultp) {
     struct timespec tp;
@@ -85,7 +95,7 @@ class CPUPerformanceInterface::CPUPerformance : public CHeapObj<mtInternal> {
 };
 
 CPUPerformanceInterface::CPUPerformance::CPUPerformance() {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__NetBSD__)
   _jvm_real = 0;
   _total_csr_nanos= 0;
   _jvm_context_switches = 0;
@@ -94,6 +104,9 @@ CPUPerformanceInterface::CPUPerformance::CPUPerformance() {
   _used_ticks = 0;
   _total_ticks = 0;
   _active_processor_count = 0;
+  _cpu_used_ticks = nullptr;
+  _cpu_total_ticks = nullptr;
+  _cpu_tick_count = 0;
 #endif
 }
 
@@ -102,10 +115,62 @@ bool CPUPerformanceInterface::CPUPerformance::initialize() {
 }
 
 CPUPerformanceInterface::CPUPerformance::~CPUPerformance() {
+#if defined(__APPLE__) || defined(__NetBSD__)
+  FREE_C_HEAP_ARRAY(_cpu_used_ticks);
+  FREE_C_HEAP_ARRAY(_cpu_total_ticks);
+#endif
 }
 
 int CPUPerformanceInterface::CPUPerformance::cpu_load(int which_logical_cpu, double* cpu_load) {
+#ifdef __NetBSD__
+  // KERN_CP_TIME returns the machine-wide counters when asked for one
+  // CPUSTATES array, and the per-CPU ones when asked for ncpu of them.
+  int ncpu = os::processor_count();
+  if (which_logical_cpu < 0 || which_logical_cpu >= ncpu) {
+    return OS_ERR;
+  }
+  ResourceMark rm;
+  size_t len = sizeof(uint64_t) * CPUSTATES * ncpu;
+  uint64_t* cp_time = NEW_RESOURCE_ARRAY(uint64_t, CPUSTATES * ncpu);
+  int mib[2] = { CTL_KERN, KERN_CP_TIME };
+  if (sysctl(mib, 2, cp_time, &len, nullptr, 0) != 0) {
+    return OS_ERR;
+  }
+  if (len != sizeof(uint64_t) * CPUSTATES * ncpu) {
+    // The kernel answered machine-wide rather than per-CPU.
+    return OS_ERR;
+  }
+
+  const uint64_t* c = cp_time + (size_t)which_logical_cpu * CPUSTATES;
+  uint64_t used  = c[CP_USER] + c[CP_NICE] + c[CP_SYS] + c[CP_INTR];
+  uint64_t total = used + c[CP_IDLE];
+
+  if (_cpu_used_ticks == nullptr) {
+    _cpu_used_ticks  = NEW_C_HEAP_ARRAY(uint64_t, ncpu, mtInternal);
+    _cpu_total_ticks = NEW_C_HEAP_ARRAY(uint64_t, ncpu, mtInternal);
+    memset(_cpu_used_ticks, 0, sizeof(uint64_t) * ncpu);
+    memset(_cpu_total_ticks, 0, sizeof(uint64_t) * ncpu);
+    _cpu_tick_count = ncpu;
+  }
+  if (which_logical_cpu >= _cpu_tick_count) {
+    return OS_ERR;
+  }
+
+  uint64_t used_prev  = _cpu_used_ticks[which_logical_cpu];
+  uint64_t total_prev = _cpu_total_ticks[which_logical_cpu];
+  _cpu_used_ticks[which_logical_cpu]  = used;
+  _cpu_total_ticks[which_logical_cpu] = total;
+
+  if (total_prev == 0 || total <= total_prev) {
+    // First call for this CPU, or the counters did not move.
+    return OS_ERR;
+  }
+
+  *cpu_load = normalize((double)(used - used_prev) / (total - total_prev));
+  return OS_OK;
+#else
   return FUNCTIONALITY_NOT_IMPLEMENTED;
+#endif
 }
 
 int CPUPerformanceInterface::CPUPerformance::cpu_load_total_process(double* cpu_load) {
@@ -144,13 +209,48 @@ int CPUPerformanceInterface::CPUPerformance::cpu_load_total_process(double* cpu_
   *cpu_load = (double)used_delta / total_delta;
 
   return OS_OK;
+#elif defined(__NetBSD__)
+  uint64_t cp_time[CPUSTATES];
+  size_t len = sizeof(cp_time);
+  int mib[2] = { CTL_KERN, KERN_CP_TIME };
+  if (sysctl(mib, 2, cp_time, &len, nullptr, 0) != 0) {
+    return OS_ERR;
+  }
+
+  long used_ticks  = (long)(cp_time[CP_USER] + cp_time[CP_NICE] + cp_time[CP_SYS]
+                            + cp_time[CP_INTR]);
+  long total_ticks = used_ticks + (long)cp_time[CP_IDLE];
+
+  if (_used_ticks == 0 || _total_ticks == 0) {
+    // First call, just set the values
+    _used_ticks  = used_ticks;
+    _total_ticks = total_ticks;
+    return OS_ERR;
+  }
+
+  long used_delta  = used_ticks - _used_ticks;
+  long total_delta = total_ticks - _total_ticks;
+
+  _used_ticks  = used_ticks;
+  _total_ticks = total_ticks;
+
+  if (total_delta == 0) {
+    // Avoid division by zero
+    return OS_ERR;
+  }
+
+  *cpu_load = (double)used_delta / total_delta;
+
+  return OS_OK;
 #else
   return FUNCTIONALITY_NOT_IMPLEMENTED;
 #endif
 }
 
 int CPUPerformanceInterface::CPUPerformance::cpu_loads_process(double* pjvmUserLoad, double* pjvmKernelLoad, double* psystemTotalLoad) {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__NetBSD__)
+  // times(2) is POSIX; only the system-wide part below needed a platform of
+  // its own.
   int result = cpu_load_total_process(psystemTotalLoad);
 
   struct tms buf;
@@ -189,6 +289,33 @@ int CPUPerformanceInterface::CPUPerformance::cpu_loads_process(double* pjvmUserL
 }
 
 int CPUPerformanceInterface::CPUPerformance::context_switch_rate(double* rate) {
+#ifdef __NetBSD__
+  // getrusage(2) counts this process's switches; the rate is per second of
+  // wall clock since the previous call.
+  struct rusage ru;
+  if (getrusage(RUSAGE_SELF, &ru) != 0) {
+    return OS_ERR;
+  }
+  uint64_t switches = (uint64_t)ru.ru_nvcsw + (uint64_t)ru.ru_nivcsw;
+
+  uint64_t now = 0;
+  if (!now_in_nanos(&now)) {
+    return OS_ERR;
+  }
+
+  if (_total_csr_nanos == 0 || now <= _total_csr_nanos) {
+    _total_csr_nanos = now;
+    _jvm_context_switches = (long)switches;
+    return OS_ERR;
+  }
+
+  double seconds = (double)(now - _total_csr_nanos) / NANOS_PER_SEC;
+  *rate = (double)(switches - (uint64_t)_jvm_context_switches) / seconds;
+
+  _total_csr_nanos = now;
+  _jvm_context_switches = (long)switches;
+  return OS_OK;
+#endif
 #ifdef __APPLE__
   mach_port_t task = mach_task_self();
   mach_msg_type_number_t task_info_count = TASK_INFO_MAX;
@@ -333,6 +460,55 @@ int SystemProcessInterface::SystemProcesses::system_processes(SystemProcess** sy
         }
       }
     }
+  }
+
+  *no_of_sys_processes = process_count;
+  *system_processes = next;
+
+  return OS_OK;
+#elif defined(__NetBSD__)
+  // KERN_PROC2 lists the processes; KERN_PROC_PATHNAME names each one.  The
+  // list is asked for twice, because it can grow between the sizing call and
+  // the fetch.
+  ResourceMark rm;
+  int mib[6] = { CTL_KERN, KERN_PROC2, KERN_PROC_ALL, 0,
+                 (int)sizeof(struct kinfo_proc2), 0 };
+  size_t len = 0;
+  if (sysctl(mib, 6, nullptr, &len, nullptr, 0) != 0 || len == 0) {
+    return OS_ERR;
+  }
+
+  int count = (int)(len / sizeof(struct kinfo_proc2));
+  mib[5] = count;
+  struct kinfo_proc2* procs = NEW_RESOURCE_ARRAY(struct kinfo_proc2, count);
+  if (sysctl(mib, 6, procs, &len, nullptr, 0) != 0) {
+    return OS_ERR;
+  }
+  count = (int)(len / sizeof(struct kinfo_proc2));
+
+  int process_count = 0;
+  SystemProcess* next = nullptr;
+  for (int i = 0; i < count; i++) {
+    pid_t pid = procs[i].p_pid;
+    if (pid == 0) {
+      continue;
+    }
+    char buffer[MAXPATHLEN];
+    size_t path_len = sizeof(buffer);
+    int name[4] = { CTL_KERN, KERN_PROC_ARGS, (int)pid, KERN_PROC_PATHNAME };
+    if (sysctl(name, 4, buffer, &path_len, nullptr, 0) != 0 || path_len == 0) {
+      // A process can go away between the listing and this call, and a
+      // kernel thread has no path at all.  Report what can be named.
+      continue;
+    }
+    SystemProcess* current = new SystemProcess();
+    char* path = NEW_C_HEAP_ARRAY(char, strlen(buffer) + 1, mtInternal);
+    strcpy(path, buffer);
+    current->set_path(path);
+    current->set_pid((int)pid);
+    current->set_next(next);
+    next = current;
+    process_count++;
   }
 
   *no_of_sys_processes = process_count;
