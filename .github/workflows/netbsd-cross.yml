@@ -162,8 +162,13 @@ jobs:
           rc=$?
           echo "make exit=$rc"
           if [ $rc -ne 0 ]; then
-            echo "=== 落ちた場所 ==="
-            grep -m1 -B20 "Error 1\|errors generated\|error:" /tmp/build.log | tail -24
+            # error の綴りを決め打ちで探すと、configure や make 自身の失敗を
+            # 取りこぼして「落ちた場所」が空になる。まず末尾をそのまま出す。
+            echo "=== log の末尾 ==="
+            tail -40 /tmp/build.log
+            echo "=== error らしき行 ==="
+            grep -nE "Error [0-9]|errors generated|error:|fatal error|No such file" \
+              /tmp/build.log | tail -20
             exit 1
           fi
           ls -d build/*/images/jdk && file build/*/images/jdk/bin/java
