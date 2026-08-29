@@ -1247,6 +1247,10 @@ void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
   if (result != nullptr) {
     return result;
   }
+  const char* error_report = ::dlerror();
+  if (error_report == nullptr) {
+    error_report = "dlerror returned no error description";
+  }
   if (ebuf == nullptr || ebuflen < 1) {
     // no error reporting requested
     return nullptr;
