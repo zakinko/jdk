@@ -87,11 +87,18 @@ jobs:
           #endif
           H
           mkdir -p cross-bin
+          # NetBSD は libstdc++ の header を /usr/include/g++ に置く。clang は
+          # netbsd を target にしてもそこを見ないので明示する。
           for t in clang clang++; do
+            case $t in
+            clang++) CXXINC="-isystem $SR/usr/include/g++" ;;
+            *)       CXXINC="" ;;
+            esac
             cat > cross-bin/x86_64-unknown-netbsd-$t <<W
           #!/bin/sh
           exec /usr/bin/$t --target=x86_64-unknown-netbsd --sysroot=$SR \\
-            --rtlib=libgcc -fuse-ld=lld -include $PWD/netbsd-clang-fix.h "\$@" -lgcc
+            --rtlib=libgcc -fuse-ld=lld $CXXINC \\
+            -include $PWD/netbsd-clang-fix.h "\$@" -lgcc
           W
             chmod +x cross-bin/x86_64-unknown-netbsd-$t
           done
