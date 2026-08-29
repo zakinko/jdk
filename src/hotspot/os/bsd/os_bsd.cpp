@@ -102,6 +102,8 @@
 
 #if defined(__FreeBSD__) || defined(__NetBSD__)
   #include <elf.h>
+  // Link_map lives in <link_elf.h>, which <link.h> pulls in.
+  #include <link.h>
 #endif
 
 #ifdef __FreeBSD__
@@ -901,6 +903,21 @@ pid_t os::Bsd::gettid() {
 
 // Returns the uid of a process or -1 on error.
 uid_t os::Bsd::get_process_uid(pid_t pid) {
+#ifdef __NetBSD__
+  // NetBSD declares struct kinfo_proc in <sys/sysctl.h> only under _KERNEL
+  // or _KMEMUSER, so it is an incomplete type here.  KERN_PROC2 returns
+  // struct kinfo_proc2 instead, which carries the uid directly rather than
+  // in a nested eproc.
+  struct kinfo_proc2 kp;
+  size_t size = sizeof kp;
+  int mib_kern[6] = {CTL_KERN, KERN_PROC2, KERN_PROC_PID, pid,
+                     (int)sizeof kp, 1};
+  if (sysctl(mib_kern, 6, &kp, &size, nullptr, 0) == 0) {
+    if (size > 0 && kp.p_pid == pid) {
+      return kp.p_uid;
+    }
+  }
+#else
   struct kinfo_proc kp;
   size_t size = sizeof kp;
   int mib_kern[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
@@ -909,6 +926,7 @@ uid_t os::Bsd::get_process_uid(pid_t pid) {
       return kp.kp_eproc.e_ucred.cr_uid;
     }
   }
+#endif
   return (uid_t)-1;
 }
 
@@ -1229,6 +1247,10 @@ void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
   if (result != nullptr) {
     return result;
   }
+  const char* error_report = ::dlerror();
+  if (error_report == nullptr) {
+    error_report = "dlerror returned no error description";
+  }
   if (ebuf == nullptr || ebuflen < 1) {
     // no error reporting requested
     return nullptr;
@@ -1539,14 +1561,19 @@ void os::pd_print_cpu_info(outputStream* st, char* buf, size_t buflen) {
 }
 
 void os::get_summary_cpu_info(char* buf, size_t buflen) {
-  unsigned int mhz;
-  size_t size = sizeof(mhz);
+  size_t size;
+  // HW_CPU_FREQ is a macOS extension.  Elsewhere keep the value the
+  // failing sysctl would have left behind, which callers can divide by.
+  unsigned int mhz = 1;
+#ifdef __APPLE__
+  size = sizeof(mhz);
   int mib[] = { CTL_HW, HW_CPU_FREQ };
   if (sysctl(mib, 2, &mhz, &size, nullptr, 0) < 0) {
     mhz = 1;  // looks like an error but can be divided by
   } else {
     mhz /= 1000000;  // reported in millions
   }
+#endif
 
   char model[100];
   size = sizeof(model);
@@ -1576,9 +1603,6 @@ void os::get_summary_cpu_info(char* buf, size_t buflen) {
 }
 
 void os::print_memory_info(outputStream* st) {
-  xsw_usage swap_usage;
-  size_t size = sizeof(swap_usage);
-
   st->print("Memory:");
   st->print(" %zuk page", os::vm_page_size()>>10);
   physical_memory_size_type phys_mem = os::physical_memory();
@@ -1589,6 +1613,11 @@ void os::print_memory_info(outputStream* st) {
   st->print("(" PHYS_MEM_TYPE_FORMAT "k free)",
             avail_mem >> 10);
 
+#ifdef __APPLE__
+  // struct xsw_usage and the vm.swapusage sysctl are macOS extensions; the
+  // BSDs have neither, and leave the swap figures out of the line.
+  xsw_usage swap_usage;
+  size_t size = sizeof(swap_usage);
   if((sysctlbyname("vm.swapusage", &swap_usage, &size, nullptr, 0) == 0) || (errno == ENOMEM)) {
     if (size >= offset_of(xsw_usage, xsu_used)) {
       st->print(", swap " UINT64_FORMAT "k",
@@ -1597,6 +1626,7 @@ void os::print_memory_info(outputStream* st) {
                 ((julong) swap_usage.xsu_avail) >> 10);
     }
   }
+#endif
 
   st->cr();
 }
