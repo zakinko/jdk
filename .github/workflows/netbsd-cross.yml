@@ -1,0 +1,181 @@
+name: netbsd-cross
+
+# jdk17 を NetBSD/amd64 向けに cross build する。netbsd-amd64-ci (28) と同じ
+# 手順で、boot JDK だけ 17 に替えたもの。28 で通した当て物のうち 17 にそのまま
+# 当たったものを載せてあるので、残りをこの CI に洗い出させる。
+#
+# 使う道具は riscv64 向けに通したものと同じ形:
+#   clang --target=x86_64-unknown-netbsd --sysroot=<sets を展開したもの>
+#   -fuse-ld=lld、末尾に -lgcc、clang に無い gcc の macro を -include で補う
+on:
+  # workflow_dispatch は default branch に置かれた workflow しか起こせない。
+  # master は上流の写しのままにしておきたいので、この branch への push で回す。
+  push:
+    branches: [netbsd-jdk17-ci]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'make の target'
+        default: images
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cross:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: 道具を入れる
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq autoconf zip unzip clang lld llvm file \
+            libcups2-dev libfontconfig1-dev
+
+      # 17 は自分より一つ二つ古い JDK を boot に取る。jdk.java.net は
+      # 古い GA を残さないので URL 直書きは腐る。setup-java に取らせる。
+      - name: build JDK (17) を置く
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: build JDK を確かめる
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME"
+          "$JAVA_HOME/bin/java" -version
+
+      - name: NetBSD の sysroot を作る
+        run: |
+          U=https://cdn.netbsd.org/pub/NetBSD/NetBSD-11.0/amd64/binary/sets
+          mkdir -p sysroot
+          # NetBSD 11.0 の amd64 は sets が .tar.xz で置かれている。riscv64 は
+          # .tgz なので、arch によって拡張子が違う。
+          for s in base comp xbase xcomp; do
+            curl -fsSL -o $s.tar.xz $U/$s.tar.xz
+            sudo tar xJf $s.tar.xz -C sysroot
+          done
+          sudo chown -R "$USER" sysroot
+          ls sysroot/usr/lib/libc.so* sysroot/lib/libc.so.12* | head -3
+
+      - name: sysroot に足りないものを入れる
+        run: |
+          SR="$PWD/sysroot"
+          # NetBSD の base sets に cups と fontconfig は入っていない。JDK は
+          # header だけ見て実行時は dlopen するので、header を借りれば足りる。
+          sudo cp -R /usr/include/cups "$SR/usr/include/"
+          sudo cp -R /usr/include/fontconfig "$SR/usr/include/"
+          sudo chown -R "$USER" "$SR/usr/include"
+          ls -d "$SR/usr/include/cups" "$SR/usr/include/fontconfig"
+
+      - name: cross の wrapper を置く
+        run: |
+          SR="$PWD/sysroot"
+          cat > "$PWD/netbsd-clang-fix.h" <<'H'
+          /* clang は gcc 拡張のこれらを定義しないが、NetBSD の header が要求する */
+          #ifndef __WCHAR_MIN__
+          #define __WCHAR_MIN__ (-__WCHAR_MAX__ - 1)
+          #endif
+          #ifndef __WINT_MIN__
+          #define __WINT_MIN__ 0U
+          #endif
+          #ifndef __SIG_ATOMIC_TYPE__
+          #define __SIG_ATOMIC_TYPE__ int
+          #endif
+          #ifndef __SIG_ATOMIC_MIN__
+          #define __SIG_ATOMIC_MIN__ (-__SIG_ATOMIC_MAX__ - 1)
+          #endif
+          H
+          mkdir -p cross-bin
+          # NetBSD は libstdc++ の header を /usr/include/g++ に置く。clang は
+          # netbsd を target にしてもそこを見ないので明示する。
+          for t in clang clang++; do
+            case $t in
+            clang++) CXXINC="-isystem $SR/usr/include/g++" ;;
+            *)       CXXINC="" ;;
+            esac
+            cat > cross-bin/x86_64-unknown-netbsd-$t <<W
+          #!/bin/sh
+          exec /usr/bin/$t --target=x86_64-unknown-netbsd --sysroot=$SR \\
+            --rtlib=libgcc -fuse-ld=lld $CXXINC \\
+            -include $PWD/netbsd-clang-fix.h "\$@" -lgcc
+          W
+            chmod +x cross-bin/x86_64-unknown-netbsd-$t
+          done
+          for t in ar ranlib strip objcopy nm objdump; do
+            ln -sf /usr/bin/llvm-$t cross-bin/x86_64-unknown-netbsd-$t
+          done
+          printf 'int main(void){return 0;}\n' > /tmp/t.c
+          ./cross-bin/x86_64-unknown-netbsd-clang /tmp/t.c -o /tmp/t.out
+          file /tmp/t.out
+
+      - name: alsa-lib を cross で建てる
+        run: |
+          export PATH="$PWD/cross-bin:$PATH"
+          SR="$PWD/sysroot"
+          curl -fsSL -o alsa.tar.bz2 https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.11.tar.bz2
+          tar xf alsa.tar.bz2 && cd alsa-lib-1.2.11
+          # --with-pic は libjvm.so に静的に取り込むため、--without-versioned は
+          # version 付き symbol が静的 link で解決できないため。
+          CC=x86_64-unknown-netbsd-clang AR=llvm-ar RANLIB=llvm-ranlib \
+            ./configure --host=x86_64-unknown-netbsd --prefix="$SR/usr" \
+              --disable-shared --enable-static --with-pic --without-versioned \
+              --disable-python --disable-old-symbols > /tmp/alsa.log 2>&1 \
+            || { tail -20 /tmp/alsa.log; exit 1; }
+          make -j2 >> /tmp/alsa.log 2>&1 && make install >> /tmp/alsa.log 2>&1
+          ls -l "$SR/usr/lib/libasound.a" "$SR/usr/include/alsa/asoundlib.h"
+
+      - name: この branch を取る
+        uses: actions/checkout@v4
+        with:
+          path: jdk
+
+      - name: configure
+        working-directory: jdk
+        run: |
+          export PATH="$GITHUB_WORKSPACE/cross-bin:$PATH"
+          SR="$GITHUB_WORKSPACE/sysroot"
+          bash configure \
+            --openjdk-target=x86_64-unknown-netbsd \
+            --with-sysroot="$SR" \
+            --with-boot-jdk="$JAVA_HOME" --with-build-jdk="$JAVA_HOME" \
+            --with-toolchain-type=clang \
+            --disable-dtrace --with-stdc++lib=dynamic \
+            --with-cups-include="$SR/usr/include" \
+            --with-alsa="$SR/usr" \
+            --with-fontconfig-include="$SR/usr/include" \
+            --with-freetype=bundled --with-giflib=bundled --with-lcms=bundled \
+            --x-includes="$SR/usr/X11R7/include" --x-libraries="$SR/usr/X11R7/lib" \
+            --disable-warnings-as-errors --disable-precompiled-headers \
+            --disable-ccache --disable-javac-server \
+            CC=x86_64-unknown-netbsd-clang CXX=x86_64-unknown-netbsd-clang++ \
+            BUILD_CC=/usr/bin/clang BUILD_CXX=/usr/bin/clang++ \
+            > /tmp/conf.log 2>&1 || { tail -30 /tmp/conf.log; exit 1; }
+          tail -20 /tmp/conf.log
+
+      - name: 建てる
+        working-directory: jdk
+        run: |
+          export PATH="$GITHUB_WORKSPACE/cross-bin:$PATH"
+          set +e
+          make ${{ inputs.target }} > /tmp/build.log 2>&1
+          rc=$?
+          echo "make exit=$rc"
+          if [ $rc -ne 0 ]; then
+            echo "=== 落ちた場所 ==="
+            grep -m1 -B20 "Error 1\|errors generated\|error:" /tmp/build.log | tail -24
+            exit 1
+          fi
+          ls -d build/*/images/jdk && file build/*/images/jdk/bin/java
+
+      - name: 出来たものを持ち帰る
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jdk17-netbsd-amd64
+          path: jdk/build/*/images/jdk
+          retention-days: 7
