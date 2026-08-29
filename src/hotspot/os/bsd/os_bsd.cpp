@@ -2448,12 +2448,28 @@ int os::open(const char *path, int oflag, int mode) {
 // current_thread_cpu_time() and thread_cpu_time(Thread*) returns
 // the fast estimate available on the platform.
 
+#ifndef __APPLE__
+// The BSDs have no mach thread_info(); pthread_getcpuclockid(3) gives a
+// per-thread CPU clock instead.  It does not separate user from system time,
+// so both callers get the total.
+static jlong bsd_thread_cpu_time(pthread_t tid) {
+  clockid_t clockid;
+  struct timespec tp;
+  if (pthread_getcpuclockid(tid, &clockid) != 0) {
+    return -1;
+  }
+  if (clock_gettime(clockid, &tp) != 0) {
+    return -1;
+  }
+  return jlong(tp.tv_sec) * NANOSECS_PER_SEC + jlong(tp.tv_nsec);
+}
+#endif
+
 jlong os::current_thread_cpu_time() {
 #ifdef __APPLE__
   return os::thread_cpu_time(Thread::current(), true /* user + sys */);
 #else
-  Unimplemented();
-  return 0;
+  return bsd_thread_cpu_time(::pthread_self());
 #endif
 }
 
@@ -2461,8 +2477,7 @@ jlong os::thread_cpu_time(Thread* thread) {
 #ifdef __APPLE__
   return os::thread_cpu_time(thread, true /* user + sys */);
 #else
-  Unimplemented();
-  return 0;
+  return bsd_thread_cpu_time(thread->osthread()->pthread_id());
 #endif
 }
 
@@ -2470,8 +2485,7 @@ jlong os::current_thread_cpu_time(bool user_sys_cpu_time) {
 #ifdef __APPLE__
   return os::thread_cpu_time(Thread::current(), user_sys_cpu_time);
 #else
-  Unimplemented();
-  return 0;
+  return bsd_thread_cpu_time(::pthread_self());
 #endif
 }
 
@@ -2497,8 +2511,7 @@ jlong os::thread_cpu_time(Thread *thread, bool user_sys_cpu_time) {
     return ((jlong)tinfo.user_time.seconds * 1000000000) + ((jlong)tinfo.user_time.microseconds * (jlong)1000);
   }
 #else
-  Unimplemented();
-  return 0;
+  return bsd_thread_cpu_time(thread->osthread()->pthread_id());
 #endif
 }
 
@@ -2518,11 +2531,9 @@ void os::thread_cpu_time_info(jvmtiTimerInfo *info_ptr) {
 }
 
 bool os::is_thread_cpu_time_supported() {
-#ifdef __APPLE__
+  // macOS answers through mach thread_info(); the other BSDs through
+  // pthread_getcpuclockid(3).  G1 refuses to start without this.
   return true;
-#else
-  return false;
-#endif
 }
 
 // System loadavg support.  Returns -1 if load average cannot be obtained.
