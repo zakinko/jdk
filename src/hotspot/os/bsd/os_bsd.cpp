@@ -352,14 +352,16 @@ void os::init_system_properties_values() {
     }
     Arguments::set_dll_dir(buf);
 
+    // The layout is <java_home>/lib/<variant>/libjvm.so.  It was
+    // <java_home>/jre/lib/<arch>/<variant>/libjvm.so until the modules came
+    // in, and the extra /<arch> strip below outlived that layout: it left
+    // java_home one directory too high, and the VM then stopped with
+    // "Failed setting boot class path".  Nothing noticed because macOS takes
+    // the branch above.
     if (pslash != nullptr) {
       pslash = strrchr(buf, '/');
       if (pslash != nullptr) {
-        *pslash = '\0';          // Get rid of /<arch>.
-        pslash = strrchr(buf, '/');
-        if (pslash != nullptr) {
-          *pslash = '\0';        // Get rid of /lib.
-        }
+        *pslash = '\0';          // Get rid of /lib.
       }
     }
     Arguments::set_java_home(buf);
