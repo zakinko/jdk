@@ -31,7 +31,12 @@
 #include "jni_util.h"
 #include "awt.h"
 
-#ifndef _AIX
+/*
+ * The screencast is done through the xdg-desktop-portal and PipeWire, which
+ * are Wayland's; neither AIX nor the BSDs run them.  Both take the stubs
+ * below instead.
+ */
+#if !defined(_AIX) && !defined(_ALLBSD_SOURCE)
 #include "screencast_pipewire.h"
 
 struct pw_buffer *(*fp_pw_stream_dequeue_buffer)(struct pw_stream *stream);
