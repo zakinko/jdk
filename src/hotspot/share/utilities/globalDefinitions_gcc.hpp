@@ -33,7 +33,10 @@
 
 #include "cppstdlib/cstdlib.hpp"
 
+// The BSDs declare alloca() in <stdlib.h> and have no <alloca.h>.
+#ifndef _ALLBSD_SOURCE
 #include <alloca.h>
+#endif
 #include <ctype.h>
 #include <dlfcn.h>
 #include <errno.h>
