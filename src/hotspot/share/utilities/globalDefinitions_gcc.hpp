@@ -31,7 +31,18 @@
 // globally used constants & types, class (forward)
 // declarations and a few frequently used utility functions.
 
+// The BSDs declare alloca() in <stdlib.h> and have no <alloca.h>.
+#ifndef _ALLBSD_SOURCE
 #include <alloca.h>
+#else
+// NetBSD's <stdlib.h> only prototypes alloca() for gcc and clang, so the
+// call is emitted against the libc symbol -- which allocates on the frame
+// that is about to be popped.  glibc's <alloca.h> and the other BSDs use
+// the builtin; say so where the header does not.
+#ifndef alloca
+#define alloca(size) __builtin_alloca(size)
+#endif
+#endif
 #include <ctype.h>
 #include <inttypes.h>
 #include <string.h>
