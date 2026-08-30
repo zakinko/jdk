@@ -75,7 +75,7 @@ static const char popularZones[][4] = {"UTC", "GMT"};
 static const char *ETC_ENVIRONMENT_FILE = "/etc/environment";
 #endif
 
-#if defined(__linux__) || defined(MACOSX)
+#if defined(__linux__) || defined(_ALLBSD_SOURCE)
 
 /*
  * Returns a pointer to the zone ID portion of the given zoneinfo file
