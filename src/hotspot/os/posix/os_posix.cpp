@@ -97,6 +97,12 @@
   #define MAP_ANONYMOUS MAP_ANON
 #endif
 
+#ifndef MAP_NORESERVE
+  // FreeBSD never implemented it and dropped the name in 11; its
+  // <sys/mman.h> keeps the bit as MAP_RESERVED0040.
+  #define MAP_NORESERVE 0
+#endif
+
 /* Input/Output types for mincore(2) */
 typedef LINUX_ONLY(unsigned) char mincore_vec_t;
 
