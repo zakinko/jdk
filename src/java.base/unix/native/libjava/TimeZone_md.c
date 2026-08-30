@@ -76,7 +76,7 @@ static const char popularZones[][4] = {"UTC", "GMT"};
 static const char *ETC_ENVIRONMENT_FILE = "/etc/environment";
 #endif
 
-#if defined(__linux__) || defined(MACOSX)
+#if defined(__linux__) || defined(_ALLBSD_SOURCE)
 
 /*
  * remove repeated path separators ('/') in the given 'path'.
