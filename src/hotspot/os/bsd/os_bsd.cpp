@@ -109,6 +109,12 @@
   #define MAP_ANONYMOUS MAP_ANON
 #endif
 
+#ifndef MAP_NORESERVE
+  // FreeBSD never implemented it and dropped the name in 11; its
+  // <sys/mman.h> keeps the bit as MAP_RESERVED0040.
+  #define MAP_NORESERVE 0
+#endif
+
 #define MAX_PATH    (2 * K)
 
 // for timer info max values which include all bits
