@@ -56,7 +56,7 @@ jobs:
           # NetBSD 11.0 の amd64 は sets が .tar.xz で置かれている。riscv64 は
           # .tgz なので、arch によって拡張子が違う。
           for s in base comp xbase xcomp; do
-            curl -fsSL -o $s.tar.xz $U/$s.tar.xz
+            curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors -o $s.tar.xz $U/$s.tar.xz
             sudo tar xJf $s.tar.xz -C sysroot
           done
           sudo chown -R "$USER" sysroot
@@ -119,7 +119,7 @@ jobs:
         run: |
           export PATH="$PWD/cross-bin:$PATH"
           SR="$PWD/sysroot"
-          curl -fsSL -o alsa.tar.bz2 https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.11.tar.bz2
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors -o alsa.tar.bz2 https://www.alsa-project.org/files/pub/lib/alsa-lib-1.2.11.tar.bz2
           tar xf alsa.tar.bz2 && cd alsa-lib-1.2.11
           # --with-pic は libjvm.so に静的に取り込むため、--without-versioned は
           # version 付き symbol が静的 link で解決できないため。
@@ -153,6 +153,7 @@ jobs:
             --with-freetype=bundled --with-giflib=bundled --with-lcms=bundled \
             --x-includes="$SR/usr/X11R7/include" --x-libraries="$SR/usr/X11R7/lib" \
             --disable-warnings-as-errors --disable-precompiled-headers \
+            --with-extra-ldflags="-Wl,--undefined-version" \
             --disable-ccache --disable-javac-server \
             CC=x86_64-unknown-netbsd-clang CXX=x86_64-unknown-netbsd-clang++ \
             BUILD_CC=/usr/bin/clang BUILD_CXX=/usr/bin/clang++ \
