@@ -342,17 +342,16 @@ void os::Bsd::initialize_system_info() {
   // since it returns a 64 bit value)
   mib[0] = CTL_HW;
 
-// mem_val below is 64 bits wide, so the sysctl asked for has to be too.
-// HW_MEMSIZE and HW_PHYSMEM64 are; HW_PHYSMEM and HW_REALMEM return an int,
-// and sysctl(3) then writes only the low half, leaving whatever was in the
-// high half as part of the answer.
+// mem_val below is 64 bits wide, and only some of these sysctls are.  macOS
+// has hw.memsize; NetBSD and OpenBSD have hw.physmem64; FreeBSD has neither,
+// and hw.physmem and hw.realmem both return an int there.  sysctl(3) then
+// writes only the low half of mem_val and reports the shorter length, so
+// take the answer from the length rather than assuming it filled the word.
 #if defined (HW_MEMSIZE) // Apple
   mib[1] = HW_MEMSIZE;
-#elif defined(HW_PHYSMEM64) // NetBSD
+#elif defined(HW_PHYSMEM64) // NetBSD, OpenBSD
   mib[1] = HW_PHYSMEM64;
-#elif defined(HW_REALMEM) // Old FreeBSD
-  mib[1] = HW_REALMEM;
-#elif defined(HW_PHYSMEM)
+#elif defined(HW_PHYSMEM) // FreeBSD, DragonFly
   mib[1] = HW_PHYSMEM;
 #else
   #error No ways to get physmem
@@ -361,7 +360,15 @@ void os::Bsd::initialize_system_info() {
   len = sizeof(mem_val);
   mem_val = 0;
   if (sysctl(mib, 2, &mem_val, &len, nullptr, 0) != -1) {
-    assert(len == sizeof(mem_val), "unexpected data size");
+    if (len == sizeof(unsigned int)) {
+      // The kernel answered with an int; mem_val's upper half was not
+      // written to and must not be read.
+      unsigned int mem32;
+      memcpy(&mem32, &mem_val, sizeof(mem32));
+      mem_val = mem32;
+    } else {
+      assert(len == sizeof(mem_val), "unexpected data size");
+    }
     _physical_memory = static_cast<physical_memory_size_type>(mem_val);
   } else {
     _physical_memory = 256 * 1024 * 1024;       // fallback (XXXBSD?)
@@ -1322,11 +1329,11 @@ void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
   }
 
   typedef struct {
-    Elf32_Half  code;         // Actual value as defined in elf.h
-    Elf32_Half  compat_class; // Compatibility of archs at VM's sense
-    char        elf_class;    // 32 or 64 bit
-    char        endianess;    // MSB or LSB
-    char*       name;         // String representation
+    Elf32_Half    code;         // Actual value as defined in elf.h
+    Elf32_Half    compat_class; // Compatibility of archs at VM's sense
+    unsigned char elf_class;    // 32 or 64 bit
+    unsigned char endianess;    // MSB or LSB
+    char*         name;         // String representation
   } arch_t;
 
   #ifndef EM_486
@@ -1495,6 +1502,7 @@ int os::get_loaded_modules_info(os::LoadedModulesCallbackFunc callback, void *pa
   }
 
   dlclose(handle);
+  return 0;
 #elif defined(__APPLE__)
   for (uint32_t i = 1; i < _dyld_image_count(); i++) {
     // Value for top_address is returned as 0 since we don't have any information about module size

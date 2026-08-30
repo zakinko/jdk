@@ -629,9 +629,10 @@ void os::Posix::print_rlimit_info(outputStream* st) {
   // maximum size of files that the process may create
   print_rlimit(st, ", FSIZE", RLIMIT_FSIZE, true);
 
-#if defined(LINUX) || defined(__APPLE__)
   // maximum number of bytes of memory that may be locked into RAM
-  // (rounded down to the nearest  multiple of system pagesize)
+  // (rounded down to the nearest  multiple of system pagesize).  Ask for the
+  // limit by name rather than by platform; the BSDs have it too.
+#ifdef RLIMIT_MEMLOCK
   print_rlimit(st, ", MEMLOCK", RLIMIT_MEMLOCK, true);
 #endif
 
