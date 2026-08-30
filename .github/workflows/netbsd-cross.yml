@@ -144,7 +144,7 @@ jobs:
           bash configure \
             --openjdk-target=x86_64-unknown-netbsd \
             --with-sysroot="$SR" \
-            --with-boot-jdk="$JAVA_HOME" --with-build-jdk="$JAVA_HOME" \
+            --with-boot-jdk="$JAVA_HOME" \
             --with-toolchain-type=clang \
             --disable-dtrace --with-stdc++lib=dynamic \
             --with-cups-include="$SR/usr/include" \
