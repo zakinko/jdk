@@ -91,7 +91,9 @@ jobs:
           # netbsd を target にしてもそこを見ないので明示する。
           for t in clang clang++; do
             case $t in
-            clang++) CXXINC="-isystem $SR/usr/include/g++" ;;
+            # NetBSD ships libstdc++, not libc++, and clang defaults to libc++
+            # for a netbsd target.
+            clang++) CXXINC="-stdlib=libstdc++ -isystem $SR/usr/include/g++" ;;
             *)       CXXINC="" ;;
             esac
             cat > cross-bin/x86_64-unknown-netbsd-$t <<W
@@ -138,7 +140,7 @@ jobs:
           bash configure \
             --openjdk-target=x86_64-unknown-netbsd \
             --with-sysroot="$SR" \
-            --with-boot-jdk=/opt/jdk28 --with-build-jdk=/opt/jdk28 \
+            --with-boot-jdk=/opt/jdk28 \
             --with-toolchain-type=clang \
             --disable-dtrace --with-stdc++lib=dynamic \
             --with-cups-include="$SR/usr/include" \
