@@ -158,7 +158,7 @@ jobs:
         run: |
           export PATH="$GITHUB_WORKSPACE/cross-bin:$PATH"
           set +e
-          make ${{ inputs.target }} > /tmp/build.log 2>&1
+          make ${{ inputs.target || 'images' }} > /tmp/build.log 2>&1
           rc=$?
           echo "make exit=$rc"
           if [ $rc -ne 0 ]; then
