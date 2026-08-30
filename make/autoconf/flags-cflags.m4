@@ -448,25 +448,6 @@ AC_DEFUN([FLAGS_SETUP_CFLAGS],
 # platform independent
 AC_DEFUN([FLAGS_SETUP_CFLAGS_HELPER],
 [
-  #### OS DEFINES, these should be independent on toolchain
-  if test "x$OPENJDK_TARGET_OS" = xlinux; then
-    CFLAGS_OS_DEF_JVM="-DLINUX -D_FILE_OFFSET_BITS=64"
-    CFLAGS_OS_DEF_JDK="-D_GNU_SOURCE -D_REENTRANT -D_FILE_OFFSET_BITS=64"
-  elif test "x$OPENJDK_TARGET_OS" = xmacosx; then
-    CFLAGS_OS_DEF_JVM="-D_ALLBSD_SOURCE -D_DARWIN_C_SOURCE -D_XOPEN_SOURCE"
-    CFLAGS_OS_DEF_JDK="-D_ALLBSD_SOURCE -D_DARWIN_UNLIMITED_SELECT"
-  elif test "x$OPENJDK_TARGET_OS" = xaix; then
-    CFLAGS_OS_DEF_JVM="-DAIX -D_LARGE_FILES"
-    CFLAGS_OS_DEF_JDK="-D_LARGE_FILES"
-  elif test "x$OPENJDK_TARGET_OS" = xbsd; then
-    CFLAGS_OS_DEF_JVM="-D_ALLBSD_SOURCE"
-    CFLAGS_OS_DEF_JDK="-D_ALLBSD_SOURCE -D_REENTRANT"
-  elif test "x$OPENJDK_TARGET_OS" = xwindows; then
-    CFLAGS_OS_DEF_JVM="-D_WINDOWS -DWIN32 -D_JNI_IMPLEMENTATION_"
-  fi
-
-  CFLAGS_OS_DEF_JDK="$CFLAGS_OS_DEF_JDK -D$OPENJDK_TARGET_OS_UPPERCASE"
-
   #### GLOBAL DEFINES
   # Set some common defines. These works for all compilers, but assume
   # -D is universally accepted.
@@ -669,6 +650,31 @@ AC_DEFUN([FLAGS_SETUP_CFLAGS_HELPER],
 # $3 - Optional prefix for compiler variables (either BUILD_ or nothing).
 AC_DEFUN([FLAGS_SETUP_CFLAGS_CPU_DEP],
 [
+  #### OS DEFINES, these should be independent on toolchain
+  # FLAGS_OS is the target on the first call and the build platform on the
+  # second, so this has to be recomputed rather than shared between them.
+  CFLAGS_OS_DEF_JVM=
+  CFLAGS_OS_DEF_JDK=
+  if test "x$FLAGS_OS" = xlinux; then
+    CFLAGS_OS_DEF_JVM="-DLINUX -D_FILE_OFFSET_BITS=64"
+    CFLAGS_OS_DEF_JDK="-D_GNU_SOURCE -D_REENTRANT -D_FILE_OFFSET_BITS=64"
+  elif test "x$FLAGS_OS" = xmacosx; then
+    CFLAGS_OS_DEF_JVM="-D_ALLBSD_SOURCE -D_DARWIN_C_SOURCE -D_XOPEN_SOURCE"
+    CFLAGS_OS_DEF_JDK="-D_ALLBSD_SOURCE -D_DARWIN_UNLIMITED_SELECT"
+  elif test "x$FLAGS_OS" = xaix; then
+    CFLAGS_OS_DEF_JVM="-DAIX -D_LARGE_FILES"
+    CFLAGS_OS_DEF_JDK="-D_LARGE_FILES"
+  elif test "x$FLAGS_OS" = xbsd; then
+    CFLAGS_OS_DEF_JVM="-D_ALLBSD_SOURCE"
+    CFLAGS_OS_DEF_JDK="-D_ALLBSD_SOURCE -D_REENTRANT"
+  elif test "x$FLAGS_OS" = xwindows; then
+    CFLAGS_OS_DEF_JVM="-D_WINDOWS -DWIN32 -D_JNI_IMPLEMENTATION_"
+  fi
+
+  FLAGS_OS_UPPERCASE=`$ECHO $FLAGS_OS | $TR 'abcdefghijklmnopqrstuvwxyz' \
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZ'`
+  CFLAGS_OS_DEF_JDK="$CFLAGS_OS_DEF_JDK -D$FLAGS_OS_UPPERCASE"
+
   #### CPU DEFINES, these should (in theory) be independent on toolchain
 
   # Setup target CPU
