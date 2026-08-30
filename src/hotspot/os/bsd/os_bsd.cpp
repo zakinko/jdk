@@ -1502,6 +1502,7 @@ int os::get_loaded_modules_info(os::LoadedModulesCallbackFunc callback, void *pa
   }
 
   dlclose(handle);
+  return 0;
 #elif defined(__APPLE__)
   for (uint32_t i = 1; i < _dyld_image_count(); i++) {
     // Value for top_address is returned as 0 since we don't have any information about module size
