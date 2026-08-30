@@ -23,7 +23,8 @@
  */
 
 #include "precompiled.hpp"
-#ifndef _WINDOWS
+// The BSDs declare alloca() in <stdlib.h> and have no <alloca.h>.
+#if !defined(_WINDOWS) && !defined(_ALLBSD_SOURCE)
 #include "alloca.h"
 #endif
 #include "asm/macroAssembler.hpp"
