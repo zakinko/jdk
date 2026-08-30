@@ -94,6 +94,10 @@
 # include <sys/stat.h>
 # include <sys/syscall.h>
 # include <sys/sysctl.h>
+#ifdef __FreeBSD__
+// FreeBSD keeps struct kinfo_proc here rather than in <sys/sysctl.h>.
+# include <sys/user.h>
+#endif
 # include <sys/time.h>
 # include <sys/times.h>
 # include <sys/types.h>
@@ -962,7 +966,17 @@ uid_t os::Bsd::get_process_uid(pid_t pid) {
       return kp.p_uid;
     }
   }
-#else
+#elif defined(__FreeBSD__)
+  // FreeBSD's struct kinfo_proc is flat, and every field carries a ki_ prefix.
+  struct kinfo_proc kp;
+  size_t size = sizeof kp;
+  int mib_kern[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+  if (sysctl(mib_kern, 4, &kp, &size, nullptr, 0) == 0) {
+    if (size > 0 && kp.ki_pid == pid) {
+      return kp.ki_uid;
+    }
+  }
+#elif defined(__APPLE__)
   struct kinfo_proc kp;
   size_t size = sizeof kp;
   int mib_kern[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
@@ -971,6 +985,8 @@ uid_t os::Bsd::get_process_uid(pid_t pid) {
       return kp.kp_eproc.e_ucred.cr_uid;
     }
   }
+#else
+  #error "unsupported OS"
 #endif
   return (uid_t)-1;
 }
