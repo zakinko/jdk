@@ -77,6 +77,12 @@
   #define MAP_ANONYMOUS MAP_ANON
 #endif
 
+#ifndef MAP_NORESERVE
+  // FreeBSD never implemented it and dropped the name in 11; its
+  // <sys/mman.h> keeps the bit as MAP_RESERVED0040.
+  #define MAP_NORESERVE 0
+#endif
+
 #define check_with_errno(check_type, cond, msg)                             \
   do {                                                                      \
     int err = errno;                                                        \
