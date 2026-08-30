@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2005, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,19 +32,23 @@
 #else
 #include <limits.h>
 #endif
-#include <sys/sysctl.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "sun_tools_attach_VirtualMachineImpl.h"
+
+#define RESTARTABLE(_cmd, _result) do { \
+  do { \
+    _result = _cmd; \
+  } while((_result == -1) && (errno == EINTR)); \
+} while(0)
 
 #define ROOT_UID 0
 
@@ -116,74 +120,15 @@ JNIEXPORT void JNICALL Java_sun_tools_attach_VirtualMachineImpl_connect
 
 /*
  * Class:     sun_tools_attach_VirtualMachineImpl
- * Method:    checkCatchesAndSendQuitTo
+ * Method:    sendQuitTo
  * Signature: (I)V
  */
-JNIEXPORT jboolean JNICALL Java_sun_tools_attach_VirtualMachineImpl_checkCatchesAndSendQuitTo
-  (JNIEnv *env, jclass cls, jint pid, jboolean throwIfNotReady)
+JNIEXPORT void JNICALL Java_sun_tools_attach_VirtualMachineImpl_sendQuitTo
+  (JNIEnv *env, jclass cls, jint pid)
 {
-#ifdef __NetBSD__
-    /*
-     * NetBSD declares struct kinfo_proc in <sys/sysctl.h> only under _KERNEL
-     * or _KMEMUSER.  KERN_PROC2 answers the same question for userland, and
-     * returns struct kinfo_proc2, whose signal sets are ki_sigset_t rather
-     * than the int mask macOS uses.
-     */
-    int mib[] = { CTL_KERN, KERN_PROC2, KERN_PROC_PID, (int)pid,
-                  (int)sizeof(struct kinfo_proc2), 1 };
-
-    struct kinfo_proc2 kiproc;
-    size_t             kipsz = sizeof(struct kinfo_proc2);
-#else
-    int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, (int)pid };
-
-    struct kinfo_proc kiproc;
-    size_t            kipsz = sizeof(struct kinfo_proc);
-#endif
-
-   /*
-    * Early in the lifetime of a JVM it has not yet initialized its signal handlers, in particular the QUIT
-    * handler, note that the default behavior of QUIT is to terminate the receiving process, if unhandled.
-    *
-    * Since we use QUIT to initiate an attach operation, if we signal a JVM during this period early in its
-    * lifetime before it has initialized its QUIT handler, such a signal delivery will terminate the JVM we
-    * are attempting to attach to!
-    *
-    * The following code guards the QUIT delivery by testing the current signal masks. It is okay to send QUIT
-    * if the signal is caught but not ignored, as that implies a handler has been installed.
-    */
-
-    if (sysctl(mib, sizeof(mib) / sizeof(int), &kiproc, &kipsz, NULL, 0) == 0) {
-#ifdef __NetBSD__
-        // ki_sigset_t is four 32-bit words; SIGQUIT sits in the first.
-        const bool ignored = (kiproc.p_sigignore.__bits[0] & sigmask(SIGQUIT)) != 0;
-        const bool caught  = (kiproc.p_sigcatch.__bits[0] & sigmask(SIGQUIT))  != 0;
-#else
-        const bool ignored = (kiproc.kp_proc.p_sigignore & sigmask(SIGQUIT)) != 0;
-        const bool caught  = (kiproc.kp_proc.p_sigcatch & sigmask(SIGQUIT))  != 0;
-#endif
-
-        // note: obviously the masks could change between testing and signalling however this is not the
-        // observed behavior of the current JVM implementation.
-
-        if (caught && !ignored) {
-            if (kill((pid_t)pid, SIGQUIT) != 0) {
-                JNU_ThrowIOExceptionWithLastError(env, "kill");
-            } else {
-                return JNI_TRUE;
-            }
-        } else if (throwIfNotReady) {
-            char msg[100];
-
-            snprintf(msg, sizeof(msg), "pid: %d, state is not ready to participate in attach handshake!", (int)pid);
-
-            JNU_ThrowByName(env, "com/sun/tools/attach/AttachNotSupportedException", msg);
-        }
-    } else {
-        JNU_ThrowIOExceptionWithLastError(env, "sysctl");
+    if (kill((pid_t)pid, SIGQUIT)) {
+        JNU_ThrowIOExceptionWithLastError(env, "kill");
     }
-
-    return JNI_FALSE;
 }
 
 /*
@@ -259,8 +204,9 @@ JNIEXPORT void JNICALL Java_sun_tools_attach_VirtualMachineImpl_checkPermissions
 JNIEXPORT void JNICALL Java_sun_tools_attach_VirtualMachineImpl_close
   (JNIEnv *env, jclass cls, jint fd)
 {
+    int res;
     shutdown(fd, SHUT_RDWR);
-    close(fd);
+    RESTARTABLE(close(fd), res);
 }
 
 /*
@@ -352,10 +298,35 @@ JNIEXPORT void JNICALL Java_sun_tools_attach_VirtualMachineImpl_createAttachFile
     }
 
     RESTARTABLE(chown(_path, geteuid(), getegid()), rc);
-    close(fd);
+
+    RESTARTABLE(close(fd), rc);
 
     /* release p here */
     if (isCopy) {
         JNU_ReleaseStringPlatformChars(env, path, _path);
     }
+}
+
+/*
+ * Class:     sun_tools_attach_BSDVirtualMachine
+ * Method:    getTempDir
+ * Signature: (V)Ljava.lang.String;
+ */
+JNIEXPORT jstring JNICALL Java_sun_tools_attach_VirtualMachineImpl_getTempDir(JNIEnv *env, jclass cls)
+{
+    // This must be hard coded because it's the system's temporary
+    // directory not the java application's temp directory, ala java.io.tmpdir.
+
+#ifdef __APPLE__
+    // macosx has a secure per-user temporary directory.
+    // Don't cache the result as this is only called once.
+    char path[PATH_MAX];
+    int pathSize = confstr(_CS_DARWIN_USER_TEMP_DIR, path, PATH_MAX);
+    if (pathSize == 0 || pathSize > PATH_MAX) {
+        strlcpy(path, "/tmp", sizeof(path));
+    }
+    return JNU_NewStringPlatform(env, path);
+#else /* __APPLE__ */
+    return (*env)->NewStringUTF(env, "/tmp");
+#endif /* __APPLE__ */
 }
