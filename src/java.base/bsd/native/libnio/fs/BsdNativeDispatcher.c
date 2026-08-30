@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2025, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2019, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,6 @@
 #else
 #define ISREADONLY MNT_RDONLY
 #endif
-#include <unistd.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -47,7 +46,6 @@ static jfieldID entry_name;
 static jfieldID entry_dir;
 static jfieldID entry_fstype;
 static jfieldID entry_options;
-static jfieldID entry_dev;
 
 struct fsstat_iter {
     struct statfs *buf;
@@ -83,8 +81,6 @@ Java_sun_nio_fs_BsdNativeDispatcher_initIDs(JNIEnv* env, jclass this)
     CHECK_NULL(entry_fstype);
     entry_options = (*env)->GetFieldID(env, clazz, "opts", "[B");
     CHECK_NULL(entry_options);
-    entry_dev = (*env)->GetFieldID(env, clazz, "dev", "J");
-    CHECK_NULL(entry_dev);
 }
 
 JNIEXPORT jlong JNICALL
@@ -112,7 +108,7 @@ Java_sun_nio_fs_BsdNativeDispatcher_getfsstat(JNIEnv* env, jclass this)
     }
 
     // It's possible that a new filesystem gets mounted between
-    // the first getfsstat and the second so loop until consistent
+    // the first getfsstat and the second so loop until consistant
 
     while (nentries != iter->nentries) {
         if (iter->buf != NULL)
@@ -151,8 +147,7 @@ Java_sun_nio_fs_BsdNativeDispatcher_fsstatEntry(JNIEnv* env, jclass this,
     char* dir;
     char* fstype;
     char* options;
-    int32_t fsid_val[2];
-    long dev;
+    dev_t dev;
 
     if (iter == NULL || iter->pos >= iter->nentries)
        return -1;
@@ -164,15 +159,6 @@ Java_sun_nio_fs_BsdNativeDispatcher_fsstatEntry(JNIEnv* env, jclass this,
         options="ro";
     else
         options="";
-#ifdef ST_RDONLY
-    // struct statvfs keeps the two-word fsid in f_fsidx; its f_fsid is the
-    // POSIX unsigned long, which has no members.
-    fsid_val[0] = iter->buf[iter->pos].f_fsidx.__fsid_val[0];
-    fsid_val[1] = iter->buf[iter->pos].f_fsidx.__fsid_val[1];
-#else
-    fsid_val[0] = iter->buf[iter->pos].f_fsid.val[0];
-    fsid_val[1] = iter->buf[iter->pos].f_fsid.val[1];
-#endif
 
     iter->pos++;
 
@@ -203,9 +189,6 @@ Java_sun_nio_fs_BsdNativeDispatcher_fsstatEntry(JNIEnv* env, jclass this,
         return -1;
     (*env)->SetByteArrayRegion(env, bytes, 0, len, (jbyte*)options);
     (*env)->SetObjectField(env, entry, entry_options, bytes);
-
-    dev = (((long)fsid_val[1]) << 32) | (long)fsid_val[0];
-    (*env)->SetLongField(env, entry, entry_dev, long_to_jlong(dev));
 
     return 0;
 }

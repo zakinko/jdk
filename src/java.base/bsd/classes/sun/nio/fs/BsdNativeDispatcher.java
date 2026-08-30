@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -53,14 +53,14 @@ class BsdNativeDispatcher extends UnixNativeDispatcher {
      * returns buf->f_mntonname (directory on which mounted)
      */
     static byte[] getmntonname(UnixPath path) throws UnixException {
-        try (NativeBuffer pathBuffer = copyToNativeBuffer(path)) {
+        NativeBuffer pathBuffer = copyToNativeBuffer(path);
+        try {
             return getmntonname0(pathBuffer.address());
+        } finally {
+            pathBuffer.release();
         }
     }
     static native byte[] getmntonname0(long pathAddress) throws UnixException;
-
-    // clonefile(2) and setattrlist(2) are macOS only; the views in
-    // BsdFileAttributeViews do not use them off macOS.
 
     // initialize field IDs
     private static native void initIDs();

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2026, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2008, 2012, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,18 +25,11 @@
 
 package sun.nio.fs;
 
+import java.nio.file.*;
 import java.io.IOException;
-import java.nio.file.FileStore;
-import java.nio.file.WatchService;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Set;
-import sun.nio.ch.IOStatus;
-
-import static sun.nio.fs.UnixConstants.*;
-import static sun.nio.fs.UnixNativeDispatcher.chown;
-import static sun.nio.fs.UnixNativeDispatcher.unlink;
+import java.util.*;
+import java.security.AccessController;
+import sun.security.action.GetPropertyAction;
 
 /**
  * Bsd implementation of FileSystem
@@ -74,10 +67,6 @@ class BsdFileSystem extends UnixFileSystem {
         return SupportedFileFileAttributeViewsHolder.supportedFileAttributeViews;
     }
 
-    // macOS copies through clonefile(2) and fcopyfile(3); neither exists on
-    // the other BSDs, so fall back to the generic read/write copy in
-    // UnixFileSystem.
-
     @Override
     void copyNonPosixAttributes(int ofd, int nfd) {
         UnixUserDefinedFileAttributeView.copyExtendedAttributes(ofd, nfd);
@@ -108,6 +97,8 @@ class BsdFileSystem extends UnixFileSystem {
         }
         return entries;
     }
+
+
 
     @Override
     FileStore getFileStore(UnixMountEntry entry) throws IOException {
