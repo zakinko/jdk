@@ -69,7 +69,7 @@ $(FIND_TESTS_CACHE_FILE): $(JTREG_ROOT_FILES) $(JTREG_GROUP_FILES) \
 	$(call MakeTargetDir)
 	( $(foreach root, $(JTREG_TESTROOTS), \
 	    $(PRINTF) "\n$(root)_JTREG_TEST_GROUPS := " ; \
-	    $(SED) -n -e 's/^\#.*//g' -e 's/\([^ ]*\)\w*=.*/\1/gp' \
+	    $(SED) -n -e 's/^\#.*//g' -e 's/\([^ ]*\)[[:alnum:]_]*=.*/\1/gp' \
 	      $($(root)_JTREG_GROUP_FILES) \
 	      | $(SORT) -u | $(TR) '\n' ' ' ; \
 	  ) \
