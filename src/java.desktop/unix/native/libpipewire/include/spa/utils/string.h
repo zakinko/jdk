@@ -15,6 +15,11 @@ extern "C" {
 #include <stdlib.h>
 #include <locale.h>
 
+#if !defined(__LOCALE_C_ONLY) && defined(__NetBSD__)
+/* NetBSD has newlocale() and freelocale() but no uselocale(). */
+#define __LOCALE_C_ONLY
+#endif
+
 #include <spa/utils/defs.h>
 
 /**
