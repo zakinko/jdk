@@ -32,7 +32,8 @@
 
 #if defined(__linux__)
 #include <sys/sendfile.h>
-#elif defined(_ALLBSD_SOURCE)
+#elif defined(__APPLE__)
+// copyfile(3) is Darwin's; the other BSDs have no such library.
 #include <copyfile.h>
 #endif
 #include "sun_nio_fs_UnixCopyFile.h"
@@ -51,7 +52,7 @@ static void throwUnixException(JNIEnv* env, int errnum) {
     }
 }
 
-#if defined(_ALLBSD_SOURCE)
+#if defined(__APPLE__)
 int fcopyfile_callback(int what, int stage, copyfile_state_t state,
     const char* src, const char* dst, void* cancel)
 {
@@ -133,7 +134,7 @@ Java_sun_nio_fs_UnixCopyFile_transfer
             return;
         }
     } while (bytes_sent > 0);
-#elif defined(_ALLBSD_SOURCE)
+#elif defined(__APPLE__)
     copyfile_state_t state;
     if (cancel != NULL) {
         state = copyfile_state_alloc();
