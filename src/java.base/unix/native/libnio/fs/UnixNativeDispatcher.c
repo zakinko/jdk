@@ -41,7 +41,11 @@
 #endif
 #include <sys/time.h>
 
-#if defined(__linux__) || defined(_ALLBSD_SOURCE)
+// macOS and NetBSD carry a Linux-shaped <sys/xattr.h>.  FreeBSD keeps
+// extended attributes behind extattr_get_file(2) and its namespaces in
+// <sys/extattr.h>, and OpenBSD and DragonFly have none, so naming
+// _ALLBSD_SOURCE here claims a header three of the five do not ship.
+#if defined(__linux__) || defined(__APPLE__) || defined(__NetBSD__)
 #include <sys/xattr.h>
 #endif
 
