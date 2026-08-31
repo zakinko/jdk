@@ -268,11 +268,12 @@ Java_com_sun_management_internal_OperatingSystemImpl_getTotalMemorySize0
     size_t rlen;
 
     mib[0] = CTL_HW;
-    // macOS spells this HW_MEMSIZE; the other BSDs HW_PHYSMEM64.
-#ifdef HW_MEMSIZE
+#if defined(HW_MEMSIZE) // Apple
     mib[1] = HW_MEMSIZE;
-#else
+#elif defined(HW_PHYSMEM64) // NetBSD, OpenBSD
     mib[1] = HW_PHYSMEM64;
+#elif defined(HW_PHYSMEM) // FreeBSD, DragonFly
+    mib[1] = HW_PHYSMEM;
 #endif
     rlen = sizeof(result);
     if (sysctl(mib, 2, &result, &rlen, NULL, 0) != 0) {
