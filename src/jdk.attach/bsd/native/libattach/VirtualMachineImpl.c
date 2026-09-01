@@ -33,6 +33,10 @@
 #include <limits.h>
 #endif
 #include <sys/sysctl.h>
+#ifdef __FreeBSD__
+// FreeBSD keeps struct kinfo_proc here rather than in <sys/sysctl.h>.
+#include <sys/user.h>
+#endif
 #include <sys/types.h>
 #include <sys/un.h>
 #include <errno.h>
@@ -154,10 +158,15 @@ JNIEXPORT jboolean JNICALL Java_sun_tools_attach_VirtualMachineImpl_checkCatches
     */
 
     if (sysctl(mib, sizeof(mib) / sizeof(int), &kiproc, &kipsz, NULL, 0) == 0) {
-#ifdef __NetBSD__
+#if defined(__NetBSD__)
         // ki_sigset_t is four 32-bit words; SIGQUIT sits in the first.
         const bool ignored = (kiproc.p_sigignore.__bits[0] & sigmask(SIGQUIT)) != 0;
         const bool caught  = (kiproc.p_sigcatch.__bits[0] & sigmask(SIGQUIT))  != 0;
+#elif defined(__FreeBSD__)
+        // FreeBSD's struct kinfo_proc is flat, and its sigset_t is four
+        // 32-bit words as well; SIGQUIT is in the first.
+        const bool ignored = (kiproc.ki_sigignore.__bits[0] & sigmask(SIGQUIT)) != 0;
+        const bool caught  = (kiproc.ki_sigcatch.__bits[0] & sigmask(SIGQUIT))  != 0;
 #else
         const bool ignored = (kiproc.kp_proc.p_sigignore & sigmask(SIGQUIT)) != 0;
         const bool caught  = (kiproc.kp_proc.p_sigcatch & sigmask(SIGQUIT))  != 0;

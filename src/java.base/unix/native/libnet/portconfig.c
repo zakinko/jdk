@@ -64,16 +64,21 @@ static int getPortRange(struct portrange *range)
     {
         int ret;
         size_t size = sizeof(range->lower);
-        ret = sysctlbyname(
-            "net.inet.ip.portrange.first", &range->lower, &size, 0, 0
-        );
+        // NetBSD calls the pair anonportmin/anonportmax; macOS and FreeBSD
+        // call it portrange.first/last.
+#ifdef __NetBSD__
+        const char *lower_name = "net.inet.ip.anonportmin";
+        const char *higher_name = "net.inet.ip.anonportmax";
+#else
+        const char *lower_name = "net.inet.ip.portrange.first";
+        const char *higher_name = "net.inet.ip.portrange.last";
+#endif
+        ret = sysctlbyname(lower_name, &range->lower, &size, 0, 0);
         if (ret == -1) {
             return -1;
         }
         size = sizeof(range->higher);
-        ret = sysctlbyname(
-            "net.inet.ip.portrange.last", &range->higher, &size, 0, 0
-        );
+        ret = sysctlbyname(higher_name, &range->higher, &size, 0, 0);
         return ret;
     }
 #else
