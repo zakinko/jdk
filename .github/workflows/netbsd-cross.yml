@@ -176,6 +176,17 @@ jobs:
           fi
           ls -d build/*/images/jdk && file build/*/images/jdk/bin/java
 
+      # NetBSD は security.pax.mprotect.global が既定で 1 で、JIT は書けて
+      # 実行できる mapping を要る。native build は Link.gmk が paxctl を
+      # 呼ぶが、paxctl は NetBSD でしか動かないので cross では打てない。
+      # section 自体は sysroot の crt が持っているので、bit を立てるだけ。
+      - name: PaX の mprotect 免除を打つ
+        working-directory: jdk
+        run: |
+          J=$(ls -d build/*/images/jdk)
+          find "$J" -type f \( -perm -u+x -o -name '*.so' \) -print0 \
+            | xargs -0 python3 make/scripts/pax-nomprotect.py 2>/dev/null | tail -1
+
       - name: 出来たものを持ち帰る
         if: success()
         uses: actions/upload-artifact@v4
