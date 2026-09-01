@@ -1274,6 +1274,13 @@ define SetupNativeCompilationBody
 		  $$($1_STRIP_CMD)
 		  $$($1_CREATE_DEBUGLINK_CMDS)
                 endif
+                ifneq ($(PAXCTL), )
+                  # NetBSD refuses a writable and executable mapping unless the
+                  # binary says otherwise, and the JIT asks for one.  Without this
+                  # every launcher stops at "Could not reserve enough space in
+                  # CodeHeap".
+		  $(PAXCTL) +m $$@
+                endif
                 ifeq ($(call isTargetOs, windows), true)
                   ifneq ($$($1_MANIFEST), )
 		    $$($1_MT) -nologo -manifest $$($1_MANIFEST) -identity:"$$($1_NAME).exe, version=$$($1_MANIFEST_VERSION)" -outputresource:$$@;#1
