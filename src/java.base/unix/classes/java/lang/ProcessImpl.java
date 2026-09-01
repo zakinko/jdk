@@ -108,6 +108,7 @@ final class ProcessImpl extends Process {
                     return lm;      // All options are valid for Linux
                 case AIX:
                 case MACOS:
+                case BSD:
                     if (lm != LaunchMechanism.VFORK) {
                         return lm; // All but VFORK are valid
                     }
