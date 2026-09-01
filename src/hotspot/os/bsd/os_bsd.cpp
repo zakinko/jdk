@@ -256,19 +256,33 @@ void os::Bsd::initialize_system_info() {
   // since it returns a 64 bit value)
   mib[0] = CTL_HW;
 
+// mem_val below is 64 bits wide, and only some of these sysctls are.  macOS
+// has hw.memsize; NetBSD and OpenBSD have hw.physmem64; FreeBSD has neither,
+// and hw.physmem and hw.realmem both return an int there.  sysctl(3) then
+// writes only the low half of mem_val and reports the shorter length, so
+// take the answer from the length rather than assuming it filled the word.
 #if defined (HW_MEMSIZE) // Apple
   mib[1] = HW_MEMSIZE;
-#elif defined(HW_PHYSMEM) // Most of BSD
+#elif defined(HW_PHYSMEM64) // NetBSD, OpenBSD
+  mib[1] = HW_PHYSMEM64;
+#elif defined(HW_PHYSMEM) // FreeBSD, DragonFly
   mib[1] = HW_PHYSMEM;
-#elif defined(HW_REALMEM) // Old FreeBSD
-  mib[1] = HW_REALMEM;
 #else
   #error No ways to get physmem
 #endif
 
   len = sizeof(mem_val);
+  mem_val = 0;
   if (sysctl(mib, 2, &mem_val, &len, NULL, 0) != -1) {
-    assert(len == sizeof(mem_val), "unexpected data size");
+    if (len == sizeof(unsigned int)) {
+      // The kernel answered with an int; mem_val's upper half was not
+      // written to and must not be read.
+      unsigned int mem32;
+      memcpy(&mem32, &mem_val, sizeof(mem32));
+      mem_val = mem32;
+    } else {
+      assert(len == sizeof(mem_val), "unexpected data size");
+    }
     _physical_memory = mem_val;
   } else {
     _physical_memory = 256 * 1024 * 1024;       // fallback (XXXBSD?)

@@ -135,6 +135,13 @@ final class ProcessImpl extends Process {
             if (osName.equals("Linux")) { return LINUX; }
             if (osName.contains("OS X")) { return BSD; }
             if (osName.equals("AIX")) { return AIX; }
+            // os.name is uname(2)'s sysname, so these are the other BSDs.
+            // They take the same mechanisms macOS does: posix_spawn and fork,
+            // vfork being a synonym for fork on all of them.
+            if (osName.equals("NetBSD") || osName.equals("FreeBSD")
+                    || osName.equals("OpenBSD") || osName.equals("DragonFly")) {
+                return BSD;
+            }
 
             throw new Error(osName + " is not a supported OS platform.");
         }

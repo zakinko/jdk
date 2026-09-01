@@ -40,6 +40,7 @@ VALID_TOOLCHAINS_all="gcc clang xlc microsoft"
 # These toolchains are valid on different platforms
 VALID_TOOLCHAINS_linux="gcc clang"
 VALID_TOOLCHAINS_macosx="gcc clang"
+VALID_TOOLCHAINS_bsd="gcc clang"
 VALID_TOOLCHAINS_aix="xlc"
 VALID_TOOLCHAINS_windows="microsoft"
 
@@ -768,6 +769,14 @@ AC_DEFUN_ONCE([TOOLCHAIN_DETECT_TOOLCHAIN_EXTRA],
     GNM="$NM"
     AC_SUBST(GNM)
   fi
+
+  # NetBSD enforces PaX MPROTECT, which stops a process from mapping memory
+  # both writable and executable -- exactly what the JIT needs.  paxctl(8)
+  # clears that for a given binary.
+  if test "x$OPENJDK_TARGET_OS" = xbsd; then
+    UTIL_LOOKUP_PROGS(PAXCTL, paxctl, $PATH:/usr/sbin:/sbin)
+  fi
+  AC_SUBST(PAXCTL)
 
   # objcopy is used for moving debug symbols to separate files when
   # full debug symbols are enabled.
