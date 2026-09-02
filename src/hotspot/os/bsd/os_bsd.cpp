@@ -257,15 +257,16 @@ void os::Bsd::initialize_system_info() {
   mib[0] = CTL_HW;
 
 // mem_val below is 64 bits wide, and only some of these sysctls are.  macOS
-// has hw.memsize; NetBSD and OpenBSD have hw.physmem64; FreeBSD has neither,
-// and hw.physmem and hw.realmem both return an int there.  sysctl(3) then
-// writes only the low half of mem_val and reports the shorter length, so
-// take the answer from the length rather than assuming it filled the word.
+// has hw.memsize and NetBSD has hw.physmem64; FreeBSD, OpenBSD and DragonFly
+// have neither and answer hw.physmem, which is 64 bits wide on them but not
+// on NetBSD, where it wraps.  sysctl(3) writes only as much as the name is
+// wide and reports that length, so take the answer from the length rather
+// than assuming it filled the word.
 #if defined (HW_MEMSIZE) // Apple
   mib[1] = HW_MEMSIZE;
-#elif defined(HW_PHYSMEM64) // NetBSD, OpenBSD
+#elif defined(HW_PHYSMEM64) // NetBSD
   mib[1] = HW_PHYSMEM64;
-#elif defined(HW_PHYSMEM) // FreeBSD, DragonFly
+#elif defined(HW_PHYSMEM) // FreeBSD, OpenBSD, DragonFly
   mib[1] = HW_PHYSMEM;
 #else
   #error No ways to get physmem
