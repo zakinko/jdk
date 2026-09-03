@@ -154,15 +154,31 @@ jobs:
               > /tmp/conf2.log 2>&1 || { tail -20 /tmp/conf2.log; exit 1; }
 
             T="${TESTS:-test/jdk/java/lang/ProcessHandle test/jdk/java/nio/file test/jdk/java/nio/channels/Selector}"
-            gmake test TEST="$T" > /tmp/test.log 2>&1 || true
+            # rc をそのまま使う。前の版は || true で握り潰したうえ、判定の
+            # grep が実際の出力形式に合っておらず、23 件落ちたまま job が緑に
+            # なった。make test は落ちれば非零を返すので、それが唯一の正。
+            # set -e が効いているので、落ちた瞬間に抜けると下の報告部が
+            # 出ない。rc を受け取ってから続ける。
+            rc=0
+            gmake test TEST="$T" > /tmp/test.log 2>&1 || rc=$?
+
             echo "===== test の結果 ====="
-            sed -n '/==============================/,$p' /tmp/test.log | head -60
-            # 落ちた test の名前を出す。緑でないなら job も赤にする。
-            if grep -qE '^ *TEST STATS:.*fail=[1-9]|Test failures' /tmp/test.log; then
-              echo "--- 落ちたもの ---"
-              grep -E '^ *FAILED:' /tmp/test.log | head -30
-              exit 1
-            fi
+            sed -n '/^==============================$/,$p' /tmp/test.log | head -40
+
+            # jtreg は落ちた test の名前を newfailures.txt に書く。集計だけでは
+            # どれが落ちたか分からず、次に何を見ればよいかも分からない。
+            for f in build/*/test-results/*/text/newfailures.txt; do
+              [ -s "$f" ] || continue
+              echo "--- 落ちたもの ($f) ---"
+              cat "$f"
+            done
+            for f in build/*/test-results/*/text/summary.txt; do
+              [ -s "$f" ] || continue
+              echo "--- 集計 ($f) ---"
+              grep -vE '(Passed|Skipped)\.' "$f" | head -40
+            done
+
+            exit $rc
 
       - name: 結果
         if: always()
