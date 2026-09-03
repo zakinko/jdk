@@ -67,9 +67,9 @@
     throw_new_debugger_exception(env, str); return; }
 
 static jfieldID p_ps_prochandle_ID = 0;
-static jfieldID threadList_ID = 0;
 static jfieldID loadObjectList_ID = 0;
-static jmethodID getThreadForThreadId_ID = 0;
+static jmethodID createClosestSymbol_ID = 0;
+static jmethodID createLoadObject_ID = 0;
 static jmethodID listAdd_ID = 0;
 
 static void throw_new_debugger_exception(JNIEnv* env, const char* errMsg) {
@@ -93,13 +93,16 @@ JNIEXPORT void JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_init0
 
   p_ps_prochandle_ID = (*env)->GetFieldID(env, cls, "p_ps_prochandle", "J");
   CHECK_EXCEPTION;
-  threadList_ID = (*env)->GetFieldID(env, cls, "threadList", "Ljava/util/List;");
-  CHECK_EXCEPTION;
   loadObjectList_ID = (*env)->GetFieldID(env, cls, "loadObjectList", "Ljava/util/List;");
   CHECK_EXCEPTION;
-  getThreadForThreadId_ID = (*env)->GetMethodID(env, cls,
-      "getThreadForThreadId", "(J)Lsun/jvm/hotspot/debugger/ThreadProxy;");
+
+  createClosestSymbol_ID = (*env)->GetMethodID(env, cls, "createClosestSymbol",
+      "(Ljava/lang/String;J)Lsun/jvm/hotspot/debugger/cdbg/ClosestSymbol;");
   CHECK_EXCEPTION;
+  createLoadObject_ID = (*env)->GetMethodID(env, cls, "createLoadObject",
+      "(Ljava/lang/String;JJ)Lsun/jvm/hotspot/debugger/cdbg/LoadObject;");
+  CHECK_EXCEPTION;
+
   listClass = (*env)->FindClass(env, "java/util/List");
   CHECK_EXCEPTION;
   listAdd_ID = (*env)->GetMethodID(env, listClass, "add", "(Ljava/lang/Object;)Z");
@@ -114,31 +117,6 @@ JNIEXPORT void JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_init0
 JNIEXPORT jint JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_getAddressSize
   (JNIEnv *env, jclass cls) {
   return (jint)(sizeof(uintptr_t) * 8);
-}
-
-/*
- * Walk the target's LWPs with PT_LWPNEXT and hand each one to the java
- * side.  Linux enumerates /proc/<pid>/task for this; NetBSD does not
- * mount procfs by default and the request is the documented route.
- */
-static void fill_threads(JNIEnv* env, jobject this_obj, pid_t pid) {
-  struct ptrace_lwpstatus lwp;
-  jobject threadList;
-
-  threadList = (*env)->GetObjectField(env, this_obj, threadList_ID);
-  CHECK_EXCEPTION;
-
-  memset(&lwp, 0, sizeof(lwp));
-  lwp.pl_lwpid = 0;
-  while (ptrace(PT_LWPNEXT, pid, (void*)&lwp, sizeof(lwp)) == 0
-         && lwp.pl_lwpid != 0) {
-    jobject thread = (*env)->CallObjectMethod(env, this_obj,
-        getThreadForThreadId_ID, (jlong)lwp.pl_lwpid);
-    CHECK_EXCEPTION;
-    (*env)->CallBooleanMethod(env, threadList, listAdd_ID, thread);
-    CHECK_EXCEPTION;
-    (*env)->DeleteLocalRef(env, thread);
-  }
 }
 
 /*
@@ -164,7 +142,6 @@ JNIEXPORT void JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_attach
   }
 
   (*env)->SetLongField(env, this_obj, p_ps_prochandle_ID, (jlong)(intptr_t)pid);
-  fill_threads(env, this_obj, pid);
 }
 
 /*
