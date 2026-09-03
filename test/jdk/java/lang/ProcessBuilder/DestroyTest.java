@@ -111,9 +111,15 @@ public class DestroyTest {
         } else {
             File userDir = new File(System.getProperty("user.dir", "."));
             File tempFile = File.createTempFile("ProcessTrap-", ".sh", userDir);
+            // os.name is uname(2)'s sysname on the BSDs, so each one names
+            // itself; the test itself only needs a POSIX shell and kill.
             if (osName.startsWith("Linux")
                     || osName.startsWith("Mac OS")
-                    || osName.equals("AIX")) {
+                    || osName.equals("AIX")
+                    || osName.equals("NetBSD")
+                    || osName.equals("FreeBSD")
+                    || osName.equals("OpenBSD")
+                    || osName.equals("DragonFly")) {
                 return new UnixTest(tempFile);
             }
         }
