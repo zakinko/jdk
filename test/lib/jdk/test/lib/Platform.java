@@ -107,6 +107,16 @@ public class Platform {
         return isOs("linux");
     }
 
+    /**
+     * True on any BSD other than macOS.  os.name is uname(2)'s sysname
+     * there, so each one names itself and there is no single prefix to
+     * match; macOS is deliberately excluded, being covered by isOSX().
+     */
+    public static boolean isBsd() {
+        return isOs("netbsd") || isOs("freebsd")
+                || isOs("openbsd") || isOs("dragonfly");
+    }
+
     public static boolean isBusybox(String tool) {
         try {
             Path toolpath = Paths.get(tool);
