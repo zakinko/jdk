@@ -792,6 +792,16 @@ static bool are_actions_equal(const struct sigaction* sa,
 // If we installed one of our signal handlers for sig, check that the current
 // setup matches what we originally installed.  Return true if signal handler
 // is different.  Otherwise, return false;
+// NetBSD's <signal.h> renames sigaction to __sigaction_siginfo, and the
+// symbol still called "sigaction" in libc is the old ABI's entry point: it
+// answers with SIGSYS.  Looking the name up as a string has to ask for the
+// one the header would have bound to.
+#ifdef __NetBSD__
+#define SIGACTION_SYMBOL "__sigaction_siginfo"
+#else
+#define SIGACTION_SYMBOL "sigaction"
+#endif
+
 static bool check_signal_handler(int sig) {
   char buf[O_BUFLEN];
   bool mismatch = false;
@@ -808,7 +818,7 @@ static bool check_signal_handler(int sig) {
   static os_sigaction_t os_sigaction = nullptr;
   if (os_sigaction == nullptr) {
     // only trust the default sigaction, in case it has been interposed
-    os_sigaction = (os_sigaction_t)dlsym(RTLD_DEFAULT, "sigaction");
+    os_sigaction = (os_sigaction_t)dlsym(RTLD_DEFAULT, SIGACTION_SYMBOL);
     if (os_sigaction == nullptr) return false;
   }
 
