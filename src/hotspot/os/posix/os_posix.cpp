@@ -416,6 +416,17 @@ static int util_posix_fallocate(int fd, off_t offset, off_t len) {
     return ftruncate(fd, len);
   }
   return -1;
+#elif defined(_ALLBSD_SOURCE)
+  // NetBSD, FreeBSD and OpenBSD answer EOPNOTSUPP for a file system that
+  // cannot preallocate -- FFS is one -- rather than filling the range in
+  // themselves the way glibc does.  ftruncate still gives a file of the
+  // right size; what is lost is the guarantee that the space is there,
+  // which is the same trade macOS makes above when F_PREALLOCATE fails.
+  int ret = posix_fallocate(fd, offset, len);
+  if (ret == EOPNOTSUPP || ret == EINVAL || ret == ENODEV) {
+    return ftruncate(fd, offset + len) == 0 ? 0 : errno;
+  }
+  return ret;
 #else
   return posix_fallocate(fd, offset, len);
 #endif
