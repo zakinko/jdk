@@ -63,6 +63,7 @@
 
 #include <elf.h>
 #include <errno.h>
+#include <link.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
@@ -104,16 +105,46 @@ static void throw_new_debugger_exception(JNIEnv* env, const char* errMsg) {
  * becomes a runtime one by adding base and taking off the lowest vaddr
  * the file's PT_LOAD headers name.
  */
+typedef struct seg_info {
+  uintptr_t        vaddr;   /* link-time address of the segment */
+  size_t           filesz;
+  off_t            offset;
+  struct seg_info *next;
+} seg_info;
+
 typedef struct lib_info {
   char             *name;
   uintptr_t         base;
   uintptr_t         end;
+  int               fd;     /* open while reading a core; -1 for a live target */
+  seg_info         *segs;
   struct lib_info  *next;
 } lib_info;
 
+/* One PT_LOAD of a core: where a stretch of the target's address space was
+   written into the file.  filesz is short of memsz wherever the kernel had
+   nothing to save -- bss, and the file-backed read-only pages it leaves out
+   because the file itself still has them. */
+typedef struct map_info {
+  uintptr_t        vaddr;
+  size_t           memsz;
+  size_t           filesz;
+  off_t            offset;
+  struct map_info *next;
+} map_info;
+
+typedef struct thread_info {
+  lwpid_t             lwpid;
+  struct reg          regs;
+  struct thread_info *next;
+} thread_info;
+
 struct ps_prochandle {
-  pid_t     pid;
-  lib_info *libs;
+  pid_t        pid;       /* 0 for a core */
+  int          core_fd;   /* -1 for a live process */
+  map_info    *maps;
+  thread_info *threads;
+  lib_info    *libs;
 };
 
 static struct ps_prochandle* get_proc(JNIEnv* env, jobject this_obj) {
@@ -294,6 +325,399 @@ static int visit_addr(const char* name, const Elf64_Sym* sym, void* arg) {
   return 0;
 }
 
+#ifdef __NetBSD__
+/*
+ * AT_PHDR, AT_PHENT and AT_PHNUM are how the executable's own program
+ * headers are found in a core: they say where the headers ended up, which
+ * with PT_PHDR gives the bias everything else is measured from.
+ */
+static void find_core_auxv(const char* notes, size_t size, uintptr_t* phdr,
+                           uintptr_t* phent, uintptr_t* phnum) {
+  size_t off = 0;
+
+  while (off + sizeof(Elf64_Nhdr) <= size) {
+    const Elf64_Nhdr* nh = (const Elf64_Nhdr*)(notes + off);
+    size_t namesz = (nh->n_namesz + 3) & ~(size_t)3;
+    size_t descsz = (nh->n_descsz + 3) & ~(size_t)3;
+    const char* name = notes + off + sizeof(*nh);
+    const AuxInfo* av;
+    size_t n, j;
+
+    if (off + sizeof(*nh) + namesz + descsz > size) {
+      return;
+    }
+    av = (const AuxInfo*)(name + namesz);
+    n = nh->n_descsz / sizeof(*av);
+    off += sizeof(*nh) + namesz + descsz;
+
+    if (nh->n_type != ELF_NOTE_NETBSD_CORE_AUXV ||
+        nh->n_namesz != sizeof(ELF_NOTE_NETBSD_CORE_NAME) ||
+        strcmp(name, ELF_NOTE_NETBSD_CORE_NAME) != 0) {
+      continue;
+    }
+    for (j = 0; j < n; j++) {
+      switch (av[j].a_type) {
+        case AT_PHDR:  *phdr  = (uintptr_t)av[j].a_v; break;
+        case AT_PHENT: *phent = (uintptr_t)av[j].a_v; break;
+        case AT_PHNUM: *phnum = (uintptr_t)av[j].a_v; break;
+        default: break;
+      }
+    }
+    return;
+  }
+}
+
+#endif /* __NetBSD__ */
+
+#ifdef __NetBSD__
+/* ---------------------------------------------------------------- core */
+
+/*
+ * A NetBSD core is an ELF whose PT_LOADs carry the writable pages and whose
+ * PT_NOTEs carry one "NetBSD-CORE" note per process and a set named
+ * "NetBSD-CORE@<lwpid>" per thread, the PT_GETREGS one of which holds the
+ * struct reg this file already knows how to unpack.
+ *
+ * The read-only pages are not in the file: the kernel leaves them out
+ * because the mapped file still has them, and their PT_LOAD says filesz 0.
+ * So a read that the core cannot answer is not an error -- it is a read
+ * that has to go to the object on disk instead, which is why every load
+ * object is kept open with the file offsets of its own segments.
+ */
+
+static int core_pread(int fd, void* buf, size_t len, off_t off) {
+  char* p = (char*)buf;
+
+  while (len > 0) {
+    ssize_t n = pread(fd, p, len, off);
+    if (n <= 0) {
+      return -1;
+    }
+    p += n;
+    off += n;
+    len -= (size_t)n;
+  }
+  return 0;
+}
+
+/* Reads from the core, or from the file the address belongs to. */
+static int core_read(struct ps_prochandle* ph, uintptr_t addr, void* buf, size_t len) {
+  map_info* m;
+  lib_info* lib;
+
+  for (m = ph->maps; m != NULL; m = m->next) {
+    if (addr < m->vaddr || addr >= m->vaddr + m->memsz) {
+      continue;
+    }
+    if (addr + len > m->vaddr + m->filesz) {
+      break;    /* the core stops short here; try the file */
+    }
+    return core_pread(ph->core_fd, buf, len, m->offset + (off_t)(addr - m->vaddr));
+  }
+
+  for (lib = ph->libs; lib != NULL; lib = lib->next) {
+    seg_info* sg;
+    if (lib->fd < 0 || addr < lib->base || addr >= lib->end) {
+      continue;
+    }
+    for (sg = lib->segs; sg != NULL; sg = sg->next) {
+      uintptr_t start = lib->base + sg->vaddr;
+      if (addr >= start && addr + len <= start + sg->filesz) {
+        return core_pread(lib->fd, buf, len, sg->offset + (off_t)(addr - start));
+      }
+    }
+  }
+  return -1;
+}
+
+static void add_map(struct ps_prochandle* ph, const Elf64_Phdr* ph_ent) {
+  map_info* m = (map_info*)calloc(1, sizeof(*m));
+
+  if (m == NULL) {
+    return;
+  }
+  m->vaddr = (uintptr_t)ph_ent->p_vaddr;
+  m->memsz = (size_t)ph_ent->p_memsz;
+  m->filesz = (size_t)ph_ent->p_filesz;
+  m->offset = (off_t)ph_ent->p_offset;
+  m->next = ph->maps;
+  ph->maps = m;
+}
+
+/*
+ * Notes are laid out namesz/descsz/type followed by the two payloads, each
+ * rounded up to four bytes -- NetBSD keeps that alignment in 64-bit cores
+ * too, so the ELF64 eight-byte rounding some systems use must not be
+ * assumed here.
+ */
+static void parse_core_notes(struct ps_prochandle* ph, const char* notes, size_t size) {
+  size_t off = 0;
+
+  while (off + sizeof(Elf64_Nhdr) <= size) {
+    const Elf64_Nhdr* nh = (const Elf64_Nhdr*)(notes + off);
+    size_t namesz = (nh->n_namesz + 3) & ~(size_t)3;
+    size_t descsz = (nh->n_descsz + 3) & ~(size_t)3;
+    const char* name = notes + off + sizeof(*nh);
+    const char* desc = name + namesz;
+    unsigned long lwpid;
+
+    if (off + sizeof(*nh) + namesz + descsz > size) {
+      return;
+    }
+    off += sizeof(*nh) + namesz + descsz;
+
+    if (nh->n_namesz < sizeof(ELF_NOTE_NETBSD_CORE_NAME) ||
+        strncmp(name, ELF_NOTE_NETBSD_CORE_NAME "@",
+                sizeof(ELF_NOTE_NETBSD_CORE_NAME)) != 0) {
+      continue;   /* the per-process notes carry nothing this needs */
+    }
+    if (nh->n_type != PT_GETREGS || nh->n_descsz < sizeof(struct reg)) {
+      continue;
+    }
+    lwpid = strtoul(name + sizeof(ELF_NOTE_NETBSD_CORE_NAME), NULL, 10);
+    if (lwpid != 0) {
+      thread_info* t = (thread_info*)calloc(1, sizeof(*t));
+      if (t != NULL) {
+        t->lwpid = (lwpid_t)lwpid;
+        memcpy(&t->regs, desc, sizeof(t->regs));
+        t->next = ph->threads;
+        ph->threads = t;
+      }
+    }
+  }
+}
+
+/*
+ * Records one shared object: where it sits, and where in its own file each
+ * of its segments came from, so that a read the core cannot answer can be
+ * satisfied from disk.
+ */
+static void add_core_lib(struct ps_prochandle* ph, const char* path, uintptr_t l_addr) {
+  char* addr;
+  size_t size;
+  const Elf64_Ehdr* eh;
+  lib_info* lib;
+  Elf64_Half i;
+  uintptr_t lowest = (uintptr_t)-1, highest = 0;
+
+  for (lib = ph->libs; lib != NULL; lib = lib->next) {
+    if (strcmp(lib->name, path) == 0) {
+      return;
+    }
+  }
+  if (map_file(path, &addr, &size) != 0) {
+    return;
+  }
+  if ((eh = elf_header(addr, size)) == NULL ||
+      eh->e_phoff + (size_t)eh->e_phnum * eh->e_phentsize > size) {
+    munmap(addr, size);
+    return;
+  }
+  lib = (lib_info*)calloc(1, sizeof(*lib));
+  if (lib == NULL) {
+    munmap(addr, size);
+    return;
+  }
+  lib->name = strdup(path);
+  lib->fd = open(path, O_RDONLY);
+  if (lib->name == NULL || lib->fd < 0) {
+    if (lib->fd >= 0) {
+      close(lib->fd);
+    }
+    free(lib->name);
+    free(lib);
+    munmap(addr, size);
+    return;
+  }
+
+  for (i = 0; i < eh->e_phnum; i++) {
+    const Elf64_Phdr* p =
+        (const Elf64_Phdr*)(addr + eh->e_phoff + (size_t)i * eh->e_phentsize);
+    seg_info* sg;
+    if (p->p_type != PT_LOAD) {
+      continue;
+    }
+    if ((uintptr_t)p->p_vaddr < lowest) {
+      lowest = (uintptr_t)p->p_vaddr;
+    }
+    if ((uintptr_t)(p->p_vaddr + p->p_memsz) > highest) {
+      highest = (uintptr_t)(p->p_vaddr + p->p_memsz);
+    }
+    sg = (seg_info*)calloc(1, sizeof(*sg));
+    if (sg != NULL) {
+      sg->vaddr = (uintptr_t)p->p_vaddr;
+      sg->filesz = (size_t)p->p_filesz;
+      sg->offset = (off_t)p->p_offset;
+      sg->next = lib->segs;
+      lib->segs = sg;
+    }
+  }
+  munmap(addr, size);
+
+  if (lowest == (uintptr_t)-1) {
+    close(lib->fd);
+    free(lib->name);
+    free(lib);
+    return;
+  }
+  /* l_addr is the bias the linker applied, so vaddr 0 of the file sits
+     there and the lowest PT_LOAD sits that much further up. */
+  lib->base = l_addr + lowest;
+  lib->end = l_addr + highest;
+  lib->next = ph->libs;
+  ph->libs = lib;
+}
+
+/*
+ * Walks the dynamic linker's list.  A NetBSD core records no file names of
+ * its own -- there is no equivalent of Linux's NT_FILE -- so the only place
+ * the shared objects are named is the link map the process itself was
+ * holding, reached through the DT_DEBUG entry of the executable.
+ */
+static void read_core_libs(struct ps_prochandle* ph, const char* execName,
+                           uintptr_t phdr_addr, size_t phent, size_t phnum) {
+  Elf64_Phdr* phdrs;
+  uintptr_t dyn_addr = 0, bias = 0;
+  size_t i;
+  Elf64_Dyn dyn;
+  uintptr_t r_debug_addr = 0;
+  struct r_debug dbg;
+  struct link_map lm;
+  uintptr_t next;
+  int guard = 0;
+
+  if (phent != sizeof(Elf64_Phdr) || phnum == 0 || phnum > 128) {
+    return;
+  }
+  phdrs = (Elf64_Phdr*)calloc(phnum, phent);
+  if (phdrs == NULL) {
+    return;
+  }
+  if (core_read(ph, phdr_addr, phdrs, phnum * phent) != 0) {
+    free(phdrs);
+    return;
+  }
+  /* AT_PHDR says where the headers ended up; PT_PHDR says where they were
+     linked to be.  The difference is the bias, and it is 0 for the
+     non-PIE case where PT_PHDR is absent. */
+  for (i = 0; i < phnum; i++) {
+    if (phdrs[i].p_type == PT_PHDR) {
+      bias = phdr_addr - (uintptr_t)phdrs[i].p_vaddr;
+    }
+  }
+  for (i = 0; i < phnum; i++) {
+    if (phdrs[i].p_type == PT_DYNAMIC) {
+      dyn_addr = bias + (uintptr_t)phdrs[i].p_vaddr;
+    }
+  }
+  free(phdrs);
+  if (dyn_addr == 0) {
+    return;
+  }
+
+  for (i = 0; i < 4096; i++) {
+    if (core_read(ph, dyn_addr + i * sizeof(dyn), &dyn, sizeof(dyn)) != 0) {
+      return;
+    }
+    if (dyn.d_tag == DT_NULL) {
+      return;
+    }
+    if (dyn.d_tag == DT_DEBUG) {
+      r_debug_addr = (uintptr_t)dyn.d_un.d_ptr;
+      break;
+    }
+  }
+  if (r_debug_addr == 0 ||
+      core_read(ph, r_debug_addr, &dbg, sizeof(dbg)) != 0) {
+    return;
+  }
+
+  next = (uintptr_t)dbg.r_map;
+  while (next != 0 && guard++ < 1024) {
+    char path[PATH_MAX];
+    size_t n = 0;
+
+    if (core_read(ph, next, &lm, sizeof(lm)) != 0) {
+      return;
+    }
+    /* The first entry names the executable, and names it as the empty
+       string; the caller was told the path by the test harness. */
+    if (lm.l_name != NULL) {
+      while (n + 1 < sizeof(path)) {
+        if (core_read(ph, (uintptr_t)lm.l_name + n, &path[n], 1) != 0) {
+          break;
+        }
+        if (path[n] == '\0') {
+          break;
+        }
+        n++;
+      }
+    }
+    path[n] = '\0';
+    add_core_lib(ph, n == 0 ? execName : path, (uintptr_t)lm.l_addr);
+    next = (uintptr_t)lm.l_next;
+  }
+}
+
+/* Returns 0 on success, leaving ph filled in. */
+static int open_core(struct ps_prochandle* ph, const char* execName,
+                     const char* coreName) {
+  Elf64_Ehdr eh;
+  Elf64_Phdr* phdrs;
+  uintptr_t phdr_addr = 0, phent = 0, phnum = 0;
+  Elf64_Half i;
+
+  ph->core_fd = open(coreName, O_RDONLY);
+  if (ph->core_fd < 0) {
+    return -1;
+  }
+  if (core_pread(ph->core_fd, &eh, sizeof(eh), 0) != 0 ||
+      memcmp(eh.e_ident, ELFMAG, SELFMAG) != 0 ||
+      eh.e_ident[EI_CLASS] != ELFCLASS64 || eh.e_type != ET_CORE ||
+      eh.e_phnum == 0 || eh.e_phentsize != sizeof(Elf64_Phdr)) {
+    return -1;
+  }
+  phdrs = (Elf64_Phdr*)calloc(eh.e_phnum, sizeof(Elf64_Phdr));
+  if (phdrs == NULL) {
+    return -1;
+  }
+  if (core_pread(ph->core_fd, phdrs, (size_t)eh.e_phnum * sizeof(Elf64_Phdr),
+                 (off_t)eh.e_phoff) != 0) {
+    free(phdrs);
+    return -1;
+  }
+  for (i = 0; i < eh.e_phnum; i++) {
+    if (phdrs[i].p_type == PT_LOAD) {
+      add_map(ph, &phdrs[i]);
+    }
+  }
+  /* The notes come second: parse_core_notes needs nothing from the maps,
+     but read_core_libs needs both, and the auxv is in a note. */
+  for (i = 0; i < eh.e_phnum; i++) {
+    char* notes;
+    if (phdrs[i].p_type != PT_NOTE || phdrs[i].p_filesz == 0) {
+      continue;
+    }
+    notes = (char*)malloc((size_t)phdrs[i].p_filesz);
+    if (notes == NULL) {
+      continue;
+    }
+    if (core_pread(ph->core_fd, notes, (size_t)phdrs[i].p_filesz,
+                   (off_t)phdrs[i].p_offset) == 0) {
+      parse_core_notes(ph, notes, (size_t)phdrs[i].p_filesz);
+      find_core_auxv(notes, (size_t)phdrs[i].p_filesz, &phdr_addr, &phent, &phnum);
+    }
+    free(notes);
+  }
+  free(phdrs);
+
+  if (phdr_addr != 0) {
+    read_core_libs(ph, execName, phdr_addr, (size_t)phent, (size_t)phnum);
+  }
+  return 0;
+}
+#endif /* __NetBSD__ */
+
 /* --------------------------------------------------------- load objects */
 
 /* Runtime address of sym in lib, or 0 if lib does not define it. */
@@ -319,13 +743,66 @@ static jlong lookup_in_lib(lib_info* lib, const char* sym) {
   return result;
 }
 
+/*
+ * BsdCDebugger.loadObjectContainingPC() binary-searches the list it is
+ * handed, so the order it arrives in is not a presentation detail: an
+ * unsorted list makes findpc answer "In unknown location" for addresses
+ * that are plainly inside a mapped object.
+ */
+static lib_info* sort_libs_by_base(lib_info* head) {
+  lib_info* sorted = NULL;
+
+  while (head != NULL) {
+    lib_info* next = head->next;
+    lib_info** slot = &sorted;
+
+    while (*slot != NULL && (*slot)->base < head->base) {
+      slot = &(*slot)->next;
+    }
+    head->next = *slot;
+    *slot = head;
+    head = next;
+  }
+  return sorted;
+}
+
 static void free_libs(lib_info* lib) {
   while (lib != NULL) {
     lib_info* next = lib->next;
+    seg_info* sg = lib->segs;
+    while (sg != NULL) {
+      seg_info* sgnext = sg->next;
+      free(sg);
+      sg = sgnext;
+    }
+    if (lib->fd >= 0) {
+      close(lib->fd);
+    }
     free(lib->name);
     free(lib);
     lib = next;
   }
+}
+
+static void free_proc(struct ps_prochandle* ph) {
+  map_info* m = ph->maps;
+  thread_info* t = ph->threads;
+
+  while (m != NULL) {
+    map_info* next = m->next;
+    free(m);
+    m = next;
+  }
+  while (t != NULL) {
+    thread_info* next = t->next;
+    free(t);
+    t = next;
+  }
+  free_libs(ph->libs);
+  if (ph->core_fd >= 0) {
+    close(ph->core_fd);
+  }
+  free(ph);
 }
 
 static lib_info* find_lib(struct ps_prochandle* ph, const char* objectName) {
@@ -367,6 +844,7 @@ static void add_mapping(struct ps_prochandle* ph, const char* path,
   }
   lib->base = start - offset;
   lib->end = end;
+  lib->fd = -1;      /* a live target is read through ptrace, not the file */
   lib->next = ph->libs;
   ph->libs = lib;
 }
@@ -390,11 +868,12 @@ static int is_elf_file(const char* path) {
   return n == (int)sizeof(magic) && memcmp(magic, ELFMAG, SELFMAG) == 0;
 }
 
+static void publish_load_objects(JNIEnv* env, jobject this_obj,
+                                 struct ps_prochandle* ph);
+
 static void fill_load_objects(JNIEnv* env, jobject this_obj,
                               struct ps_prochandle* ph) {
   struct kinfo_vmentry* vmmap;
-  lib_info* lib;
-  jobject list;
 #ifdef __FreeBSD__
   int nent = 0;
 #else
@@ -415,7 +894,15 @@ static void fill_load_objects(JNIEnv* env, jobject this_obj,
   }
   free(vmmap);
 
-  list = (*env)->GetObjectField(env, this_obj, loadObjectList_ID);
+  ph->libs = sort_libs_by_base(ph->libs);
+  publish_load_objects(env, this_obj, ph);
+}
+
+static void publish_load_objects(JNIEnv* env, jobject this_obj,
+                                 struct ps_prochandle* ph) {
+  lib_info* lib;
+  jobject list = (*env)->GetObjectField(env, this_obj, loadObjectList_ID);
+
   if (list == NULL) {
     return;
   }
@@ -501,6 +988,7 @@ JNIEXPORT void JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_attach
     THROW_NEW_DEBUGGER_EXCEPTION("out of memory");
   }
   ph->pid = pid;
+  ph->core_fd = -1;
   (*env)->SetLongField(env, this_obj, p_ps_prochandle_ID, (jlong)(intptr_t)ph);
 
   fill_load_objects(env, this_obj, ph);
@@ -514,7 +1002,43 @@ JNIEXPORT void JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_attach
 JNIEXPORT void JNICALL
 Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_attach0__Ljava_lang_String_2Ljava_lang_String_2
   (JNIEnv *env, jobject this_obj, jstring execName, jstring coreName) {
-  THROW_NEW_DEBUGGER_EXCEPTION("core file debugging is not implemented here");
+  struct ps_prochandle* ph;
+  const char* exec_str;
+  const char* core_str;
+  int ok;
+
+  exec_str = (*env)->GetStringUTFChars(env, execName, NULL);
+  CHECK_EXCEPTION;
+  core_str = (*env)->GetStringUTFChars(env, coreName, NULL);
+  if (core_str == NULL) {
+    (*env)->ReleaseStringUTFChars(env, execName, exec_str);
+    return;
+  }
+
+  ph = (struct ps_prochandle*)calloc(1, sizeof(*ph));
+  if (ph == NULL) {
+    (*env)->ReleaseStringUTFChars(env, coreName, core_str);
+    (*env)->ReleaseStringUTFChars(env, execName, exec_str);
+    THROW_NEW_DEBUGGER_EXCEPTION("out of memory");
+  }
+  ph->core_fd = -1;
+#ifdef __NetBSD__
+  ok = (open_core(ph, exec_str, core_str) == 0);
+#else
+  /* The core reader speaks NetBSD's note format and nothing else yet. */
+  ok = 0;
+#endif
+  (*env)->ReleaseStringUTFChars(env, coreName, core_str);
+  (*env)->ReleaseStringUTFChars(env, execName, exec_str);
+
+  if (!ok) {
+    free_proc(ph);
+    THROW_NEW_DEBUGGER_EXCEPTION("cannot read the core file");
+  }
+  ph->libs = sort_libs_by_base(ph->libs);
+  (*env)->SetLongField(env, this_obj, p_ps_prochandle_ID, (jlong)(intptr_t)ph);
+
+  publish_load_objects(env, this_obj, ph);
 }
 
 /*
@@ -526,9 +1050,10 @@ JNIEXPORT void JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_detach
   (JNIEnv *env, jobject this_obj) {
   struct ps_prochandle* ph = get_proc(env, this_obj);
   if (ph != NULL) {
-    ptrace(PT_DETACH, ph->pid, (void*)1, 0);
-    free_libs(ph->libs);
-    free(ph);
+    if (ph->pid != 0) {
+      ptrace(PT_DETACH, ph->pid, (void*)1, 0);
+    }
+    free_proc(ph);
     (*env)->SetLongField(env, this_obj, p_ps_prochandle_ID, (jlong)0);
   }
 }
@@ -638,26 +1163,40 @@ JNIEXPORT jobject JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_loo
  */
 JNIEXPORT jbyteArray JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_readBytesFromProcess0
   (JNIEnv *env, jobject this_obj, jlong addr, jlong numBytes) {
-  pid_t pid = get_pid(env, this_obj);
+  struct ps_prochandle* ph = get_proc(env, this_obj);
   jbyteArray array;
   jbyte *buf;
-  struct ptrace_io_desc io;
+  int failed;
 
+  if (ph == NULL) {
+    return NULL;
+  }
   array = (*env)->NewByteArray(env, (jsize)numBytes);
   CHECK_EXCEPTION_(0);
   buf = (*env)->GetByteArrayElements(env, array, NULL);
   CHECK_EXCEPTION_(0);
 
-  /*
-   * PT_IO moves the whole range in one call.  Linux peeks a word at a
-   * time because PTRACE_PEEKDATA is all it has.
-   */
-  io.piod_op = PIOD_READ_D;
-  io.piod_offs = (void*)(uintptr_t)addr;
-  io.piod_addr = buf;
-  io.piod_len = (size_t)numBytes;
+  if (ph->pid != 0) {
+    /*
+     * PT_IO moves the whole range in one call.  Linux peeks a word at a
+     * time because PTRACE_PEEKDATA is all it has.
+     */
+    struct ptrace_io_desc io;
+    io.piod_op = PIOD_READ_D;
+    io.piod_offs = (void*)(uintptr_t)addr;
+    io.piod_addr = buf;
+    io.piod_len = (size_t)numBytes;
+    failed = (ptrace(PT_IO, ph->pid, (void*)&io, 0) != 0 ||
+              io.piod_len != (size_t)numBytes);
+  } else {
+#ifdef __NetBSD__
+    failed = (core_read(ph, (uintptr_t)addr, buf, (size_t)numBytes) != 0);
+#else
+    failed = 1;
+#endif
+  }
 
-  if (ptrace(PT_IO, pid, (void*)&io, 0) != 0 || io.piod_len != (size_t)numBytes) {
+  if (failed) {
     (*env)->ReleaseByteArrayElements(env, array, buf, JNI_ABORT);
     return NULL;
   }
@@ -672,17 +1211,33 @@ JNIEXPORT jbyteArray JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_
  */
 JNIEXPORT jlongArray JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_getThreadIntegerRegisterSet0
   (JNIEnv *env, jobject this_obj, jlong thread_id) {
-  pid_t pid = get_pid(env, this_obj);
+  struct ps_prochandle* ph = get_proc(env, this_obj);
   struct reg gregs;
   jlongArray array;
   jlong *regs;
 
-  if (ptrace(PT_GETREGS, pid, (void*)&gregs, (int)thread_id) != 0) {
-    /*
-     * Not fatal: the same is true on Linux, where an ESRCH here makes the
-     * stack walker fall back on the last java frame.
-     */
+  if (ph == NULL) {
     return NULL;
+  }
+  if (ph->pid != 0) {
+    if (ptrace(PT_GETREGS, ph->pid, (void*)&gregs, (int)thread_id) != 0) {
+      /*
+       * Not fatal: the same is true on Linux, where an ESRCH here makes the
+       * stack walker fall back on the last java frame.
+       */
+      return NULL;
+    }
+  } else {
+    thread_info* t;
+    for (t = ph->threads; t != NULL; t = t->next) {
+      if (t->lwpid == (lwpid_t)thread_id) {
+        break;
+      }
+    }
+    if (t == NULL) {
+      return NULL;
+    }
+    gregs = t->regs;
   }
 
 #define NPRGREG   sun_jvm_hotspot_debugger_amd64_AMD64ThreadContext_NPRGREG
