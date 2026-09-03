@@ -52,6 +52,9 @@
 #define ftruncate64 ftruncate
 #define fstat64 fstat
 #define fdatasync fsync
+// statvfs is already 64-bit on the BSDs, and there is no statvfs64.
+#define statvfs64 statvfs
+#define fstatvfs64 fstatvfs
 #endif
 
 #include "jni.h"
@@ -344,11 +347,7 @@ Java_sun_nio_ch_FileDispatcherImpl_setDirect0(JNIEnv *env, jclass clazz,
 {
     jint fd = fdval(env, fdo);
     jint result;
-#ifdef MACOSX
-    struct statvfs file_stat;
-#else
     struct statvfs64 file_stat;
-#endif
 
 #if defined(O_DIRECT) || defined(F_NOCACHE) || defined(DIRECTIO_ON)
 #ifdef O_DIRECT
@@ -376,11 +375,7 @@ Java_sun_nio_ch_FileDispatcherImpl_setDirect0(JNIEnv *env, jclass clazz,
         return result;
     }
 #endif
-#ifdef MACOSX
-    result = fstatvfs(fd, &file_stat);
-#else
     result = fstatvfs64(fd, &file_stat);
-#endif
     if(result == -1) {
         JNU_ThrowIOExceptionWithLastError(env, "DirectIO setup failed");
         return result;

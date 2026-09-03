@@ -80,6 +80,7 @@
 # include <signal.h>
 # include <stdint.h>
 # include <stdio.h>
+# include <stdlib.h>
 # include <string.h>
 # include <sys/ioctl.h>
 # include <sys/mman.h>
@@ -257,15 +258,16 @@ void os::Bsd::initialize_system_info() {
   mib[0] = CTL_HW;
 
 // mem_val below is 64 bits wide, and only some of these sysctls are.  macOS
-// has hw.memsize; NetBSD and OpenBSD have hw.physmem64; FreeBSD has neither,
-// and hw.physmem and hw.realmem both return an int there.  sysctl(3) then
-// writes only the low half of mem_val and reports the shorter length, so
-// take the answer from the length rather than assuming it filled the word.
+// has hw.memsize and NetBSD has hw.physmem64; FreeBSD, OpenBSD and DragonFly
+// have neither and answer hw.physmem, which is 64 bits wide on them but not
+// on NetBSD, where it wraps.  sysctl(3) writes only as much as the name is
+// wide and reports that length, so take the answer from the length rather
+// than assuming it filled the word.
 #if defined (HW_MEMSIZE) // Apple
   mib[1] = HW_MEMSIZE;
-#elif defined(HW_PHYSMEM64) // NetBSD, OpenBSD
+#elif defined(HW_PHYSMEM64) // NetBSD
   mib[1] = HW_PHYSMEM64;
-#elif defined(HW_PHYSMEM) // FreeBSD, DragonFly
+#elif defined(HW_PHYSMEM) // FreeBSD, OpenBSD, DragonFly
   mib[1] = HW_PHYSMEM;
 #else
   #error No ways to get physmem
@@ -382,14 +384,16 @@ void os::init_system_properties_values() {
     }
     Arguments::set_dll_dir(buf);
 
+    // The layout is <java_home>/lib/<variant>/libjvm.so.  It was
+    // <java_home>/jre/lib/<arch>/<variant>/libjvm.so until the modules came
+    // in, and the extra /<arch> strip below outlived that layout: it left
+    // java_home one directory too high, and the VM then stopped with
+    // "Failed setting boot class path".  Nothing noticed because macOS takes
+    // the branch above.
     if (pslash != NULL) {
       pslash = strrchr(buf, '/');
       if (pslash != NULL) {
-        *pslash = '\0';          // Get rid of /<arch>.
-        pslash = strrchr(buf, '/');
-        if (pslash != NULL) {
-          *pslash = '\0';        // Get rid of /lib.
-        }
+        *pslash = '\0';          // Get rid of /lib.
       }
     }
     Arguments::set_java_home(buf);
@@ -2603,6 +2607,76 @@ void os::pause() {
   }
 }
 
+// /cores is a macOS directory and does not exist on the other BSDs, which
+// write the core into the process's own working directory under a name the
+// kernel builds from a pattern.  NetBSD keeps that pattern per process under
+// CTL_PROC and FreeBSD and DragonFly keep one for the system in
+// kern.corefile; both default to the program's name with ".core" appended.
+// Reporting /cores here sent every test that goes looking for a core file
+// hunting in a directory that was never there.
+static int get_default_core_path(char* buffer, size_t bufferSize) {
+  char pattern[PATH_MAX];
+  char expanded[PATH_MAX];
+  size_t sz = sizeof(pattern);
+  bool have_pattern = false;
+  size_t out = 0;
+
+#if defined(__NetBSD__)
+  int mib[3] = { CTL_PROC, (int)os::current_process_id(), PROC_PID_CORENAME };
+  have_pattern = (::sysctl(mib, 3, pattern, &sz, NULL, 0) == 0);
+#elif defined(__FreeBSD__) || defined(__DragonFly__)
+  have_pattern = (::sysctlbyname("kern.corefile", pattern, &sz, NULL, 0) == 0);
+#endif
+  if (!have_pattern) {
+    // OpenBSD has no such knob, and this is what every one of them falls
+    // back on anyway.
+    jio_snprintf(pattern, sizeof(pattern), "%%n.core");
+  }
+
+  // Only the escapes the defaults use are expanded.  Anything else is left
+  // to stand, which at worst names a file that is not there -- the same
+  // result as reporting nothing, and better than reporting a wrong path
+  // with confidence.
+  for (const char* p = pattern; *p != '\0' && out + 1 < sizeof(expanded); p++) {
+    if (*p != '%' || *(p + 1) == '\0') {
+      expanded[out++] = *p;
+      continue;
+    }
+    p++;
+    switch (*p) {
+      case 'n': case 'N':
+        out += jio_snprintf(expanded + out, sizeof(expanded) - out, "%s", ::getprogname());
+        break;
+      case 'p': case 'P':
+        out += jio_snprintf(expanded + out, sizeof(expanded) - out, "%d", os::current_process_id());
+        break;
+      case 'u': case 'U':
+        out += jio_snprintf(expanded + out, sizeof(expanded) - out, "%d", (int)::getuid());
+        break;
+      default:
+        expanded[out++] = '%';
+        if (out + 1 < sizeof(expanded)) {
+          expanded[out++] = *p;
+        }
+        break;
+    }
+    if (out >= sizeof(expanded)) {
+      out = sizeof(expanded) - 1;
+      break;
+    }
+  }
+  expanded[out] = '\0';
+
+  if (expanded[0] == '/') {
+    return jio_snprintf(buffer, bufferSize, "%s", expanded);
+  }
+  char cwd[PATH_MAX];
+  if (::getcwd(cwd, sizeof(cwd)) == NULL) {
+    return jio_snprintf(buffer, bufferSize, "%s", expanded);
+  }
+  return jio_snprintf(buffer, bufferSize, "%s/%s", cwd, expanded);
+}
+
 // Get the kern.corefile setting, or otherwise the default path to the core file
 // Returns the length of the string
 int os::get_core_path(char* buffer, size_t bufferSize) {
@@ -2625,7 +2699,7 @@ int os::get_core_path(char* buffer, size_t bufferSize) {
   } else
 #endif
   {
-    n = jio_snprintf(buffer, bufferSize, "/cores/core.%d", os::current_process_id());
+    n = get_default_core_path(buffer, bufferSize);
   }
   // Truncate if theoretical string was longer than bufferSize
   n = MIN2(n, (int)bufferSize);
