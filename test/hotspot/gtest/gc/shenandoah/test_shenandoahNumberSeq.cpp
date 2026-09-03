@@ -27,6 +27,7 @@
 #include "utilities/ostream.hpp"
 
 #include "utilities/vmassert_uninstall.hpp"
+#include <cmath>
 #include <iostream>
 #include "utilities/vmassert_reinstall.hpp"
 
