@@ -59,7 +59,10 @@
 #include <sys/sysctl.h>
 #include <sys/wait.h>
 #include <machine/reg.h>
+#ifdef __NetBSD__
+/* _REG_RAX and the rest of the indices into struct reg live here. */
 #include <machine/mcontext.h>
+#endif
 
 #include <elf.h>
 #include <errno.h>
@@ -1220,7 +1223,17 @@ JNIEXPORT jlongArray JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_
     return NULL;
   }
   if (ph->pid != 0) {
-    if (ptrace(PT_GETREGS, ph->pid, (void*)&gregs, (int)thread_id) != 0) {
+    /*
+     * Which argument names the thread differs: NetBSD takes the lwp in
+     * data and the process in pid, FreeBSD addresses the thread through
+     * pid itself.
+     */
+#ifdef __NetBSD__
+    int failed = (ptrace(PT_GETREGS, ph->pid, (void*)&gregs, (int)thread_id) != 0);
+#else
+    int failed = (ptrace(PT_GETREGS, (pid_t)thread_id, (void*)&gregs, 0) != 0);
+#endif
+    if (failed) {
       /*
        * Not fatal: the same is true on Linux, where an ESRCH here makes the
        * stack walker fall back on the last java frame.
@@ -1248,36 +1261,47 @@ JNIEXPORT jlongArray JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_
   regs = (*env)->GetLongArrayElements(env, array, NULL);
   CHECK_EXCEPTION_(0);
 
-  /* struct reg is __gregset_t, indexed by the _REG_* enum. */
-  regs[REG_INDEX(R15)]    = gregs.regs[_REG_R15];
-  regs[REG_INDEX(R14)]    = gregs.regs[_REG_R14];
-  regs[REG_INDEX(R13)]    = gregs.regs[_REG_R13];
-  regs[REG_INDEX(R12)]    = gregs.regs[_REG_R12];
-  regs[REG_INDEX(R11)]    = gregs.regs[_REG_R11];
-  regs[REG_INDEX(R10)]    = gregs.regs[_REG_R10];
-  regs[REG_INDEX(R9)]     = gregs.regs[_REG_R9];
-  regs[REG_INDEX(R8)]     = gregs.regs[_REG_R8];
-  regs[REG_INDEX(RDI)]    = gregs.regs[_REG_RDI];
-  regs[REG_INDEX(RSI)]    = gregs.regs[_REG_RSI];
-  regs[REG_INDEX(RBP)]    = gregs.regs[_REG_RBP];
-  regs[REG_INDEX(RBX)]    = gregs.regs[_REG_RBX];
-  regs[REG_INDEX(RDX)]    = gregs.regs[_REG_RDX];
-  regs[REG_INDEX(RCX)]    = gregs.regs[_REG_RCX];
-  regs[REG_INDEX(RAX)]    = gregs.regs[_REG_RAX];
-  regs[REG_INDEX(TRAPNO)] = gregs.regs[_REG_TRAPNO];
-  regs[REG_INDEX(ERR)]    = gregs.regs[_REG_ERR];
-  regs[REG_INDEX(RIP)]    = gregs.regs[_REG_RIP];
-  regs[REG_INDEX(CS)]     = gregs.regs[_REG_CS];
-  regs[REG_INDEX(RFL)]    = gregs.regs[_REG_RFLAGS];
-  regs[REG_INDEX(RSP)]    = gregs.regs[_REG_RSP];
-  regs[REG_INDEX(SS)]     = gregs.regs[_REG_SS];
-  regs[REG_INDEX(FS)]     = gregs.regs[_REG_FS];
-  regs[REG_INDEX(GS)]     = gregs.regs[_REG_GS];
-  regs[REG_INDEX(ES)]     = gregs.regs[_REG_ES];
-  regs[REG_INDEX(DS)]     = gregs.regs[_REG_DS];
-  /* NetBSD's struct reg carries no FS_BASE or GS_BASE. */
+  /*
+   * NetBSD's struct reg is a __gregset_t indexed by the _REG_* enum;
+   * FreeBSD's names its members.  Same registers, two spellings.
+   */
+#ifdef __NetBSD__
+#define GREG(up, lo) gregs.regs[_REG_##up]
+#else
+#define GREG(up, lo) gregs.r_##lo
+#endif
+
+  regs[REG_INDEX(R15)]    = GREG(R15, r15);
+  regs[REG_INDEX(R14)]    = GREG(R14, r14);
+  regs[REG_INDEX(R13)]    = GREG(R13, r13);
+  regs[REG_INDEX(R12)]    = GREG(R12, r12);
+  regs[REG_INDEX(R11)]    = GREG(R11, r11);
+  regs[REG_INDEX(R10)]    = GREG(R10, r10);
+  regs[REG_INDEX(R9)]     = GREG(R9, r9);
+  regs[REG_INDEX(R8)]     = GREG(R8, r8);
+  regs[REG_INDEX(RDI)]    = GREG(RDI, rdi);
+  regs[REG_INDEX(RSI)]    = GREG(RSI, rsi);
+  regs[REG_INDEX(RBP)]    = GREG(RBP, rbp);
+  regs[REG_INDEX(RBX)]    = GREG(RBX, rbx);
+  regs[REG_INDEX(RDX)]    = GREG(RDX, rdx);
+  regs[REG_INDEX(RCX)]    = GREG(RCX, rcx);
+  regs[REG_INDEX(RAX)]    = GREG(RAX, rax);
+  regs[REG_INDEX(TRAPNO)] = GREG(TRAPNO, trapno);
+  regs[REG_INDEX(ERR)]    = GREG(ERR, err);
+  regs[REG_INDEX(RIP)]    = GREG(RIP, rip);
+  regs[REG_INDEX(CS)]     = GREG(CS, cs);
+  regs[REG_INDEX(RFL)]    = GREG(RFLAGS, rflags);
+  regs[REG_INDEX(RSP)]    = GREG(RSP, rsp);
+  regs[REG_INDEX(SS)]     = GREG(SS, ss);
+  regs[REG_INDEX(FS)]     = GREG(FS, fs);
+  regs[REG_INDEX(GS)]     = GREG(GS, gs);
+  regs[REG_INDEX(ES)]     = GREG(ES, es);
+  regs[REG_INDEX(DS)]     = GREG(DS, ds);
+  /* Neither one's struct reg carries FS_BASE or GS_BASE. */
   regs[REG_INDEX(FSBASE)] = 0;
   regs[REG_INDEX(GSBASE)] = 0;
+
+#undef GREG
 
   (*env)->ReleaseLongArrayElements(env, array, regs, 0);
   return array;
