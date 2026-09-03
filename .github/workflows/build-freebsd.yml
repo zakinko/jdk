@@ -1,0 +1,169 @@
+name: freebsd
+
+# mainline (openjdk/jdk = 28-dev) を FreeBSD/amd64 で native に建てて、移植が
+# 触った所を実際に走らせる。
+#
+# netbsd-cross.yml と役割が違う。あちらは NetBSD 向けの binary が出来ることを
+# 見るだけで、cross なので一行も走らせられない。移植の中身 — kqueue の
+# selector、BsdFileSystemProvider、ProcessHandleImpl_bsd.c — が正しいかは、
+# BSD の上で test を回さないと分からない。
+#
+# FreeBSD を選ぶ理由は boot JDK が在るからで、そこだけ。移植は
+# OPENJDK_TARGET_OS=bsd と _ALLBSD_SOURCE で書いてあり NetBSD 専用の分岐を
+#持たないので、FreeBSD で通る道は NetBSD でも同じ道を通る。
+#
+#   NetBSD    pkgsrc の lang は openjdk21 まで。28-dev は 26 以上を要求する
+#   OpenBSD   ports は jdk-25 まで。同じ理由で門前払い
+#   FreeBSD   ports に openjdk26 が在る
+#
+# 手元 (Vultr の FreeBSD 15.1) では make images まで通り、建てた javac と java
+# で hello world が走ることまで確かめた。ここで足すのは test の方。
+on:
+  # workflow_dispatch は default branch の workflow しか起こせない。master は
+  # 上流の写しのままにしておきたいので、netbsd-cross.yml と同じくこの branch
+  # への push で回す。
+  push:
+    branches: [netbsd-amd64-ci]
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: 'make test の TEST='
+        default: 'test/jdk/java/lang/ProcessHandle test/jdk/java/nio/file test/jdk/java/nio/channels/Selector'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  freebsd:
+    runs-on: ubuntu-latest
+    # VM の中の build が 1 時間強、test がその倍まで見る。job の上限は 6 時間。
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 置き場所を空ける
+        # runner の / は 14GB しか空いていない。JDK の build tree は 15GB を
+        # 超えるので、最初から /mnt (65GB) を使う。VM の image もそちらへ。
+        run: |
+          df -h / /mnt
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h /
+
+      - name: FreeBSD で建てて走らせる
+        uses: vmactions/freebsd-vm@v1
+        env:
+          TESTS: ${{ inputs.tests }}
+        with:
+          release: '14.3'
+          usesh: true
+          # 既定より大きく取る。build が並列で 4 つ走るので memory も要る。
+          mem: 12288
+          cpu: 4
+          copyback: false
+          prepare: |
+            pkg install -y openjdk26 bash gmake autoconf zip unzip cups \
+              fontconfig freetype2 libX11 libXext libXrender libXrandr \
+              libXtst libXt libXi giflib png jpeg-turbo harfbuzz wget
+          envs: 'TESTS'
+          run: |
+            set -e
+            java -version 2>&1 | head -2 || true
+            /usr/local/openjdk26/bin/java -version 2>&1 | head -2
+
+            # 手元で要った旗はこの六つ。前二つが移植そのものに効く。
+            #
+            #   --with-toolchain-type=clang
+            #       VALID_TOOLCHAINS_bsd は "gcc clang" で先頭が既定になる。
+            #       NetBSD は base に gcc が在るので正しいが、FreeBSD に gcc は
+            #       無い。ここを外すと "Could not find a C compiler" で止まる。
+            #   --disable-dtrace
+            #       FreeBSD には dtrace が在るので configure が有効にするが、
+            #       hotspot の .d を通すと
+            #         dtrace: failed to compile script hotspot.h.d:
+            #         line 1: empty D program translation unit
+            #       で落ちる。NetBSD には dtrace が無いので既定で切れており、
+            #       この道は踏まない。
+            #
+            # 残り四つは header の在処。configure は /usr/local を探さない。
+            # NetBSD なら /usr/pkg、OpenBSD なら X11 系が /usr/X11R6 になる。
+            bash configure \
+              --with-boot-jdk=/usr/local/openjdk26 \
+              --with-toolchain-type=clang \
+              --disable-dtrace \
+              --with-cups-include=/usr/local/include \
+              --with-freetype-include=/usr/local/include/freetype2 \
+              --with-freetype-lib=/usr/local/lib \
+              --with-fontconfig-include=/usr/local/include \
+              --x-includes=/usr/local/include --x-libraries=/usr/local/lib \
+              --disable-warnings-as-errors \
+              --with-jvm-variants=server \
+              > /tmp/conf.log 2>&1 || { tail -30 /tmp/conf.log; exit 1; }
+            grep -E '^\* (Boot JDK|Toolchain|Version string):' /tmp/conf.log
+
+            gmake images > /tmp/build.log 2>&1 || {
+              grep -n '] Error' /tmp/build.log | head -5
+              for f in build/*/make-support/failure-logs/*.log; do
+                echo "--- $f"; tail -15 "$f"
+              done
+              exit 1
+            }
+            J=$(echo build/bsd-x86_64-server-release/images/jdk)
+            $J/bin/java -version
+
+            # 最低限、建てた JDK 自身で組んで走ることを見る。ここが通らない
+            # うちは test を回しても意味がない。
+            mkdir -p /tmp/smoke && cd /tmp/smoke
+            cat > H.java <<'EOF'
+            public class H {
+              public static void main(String[] a) {
+                System.out.println("hello from " + System.getProperty("os.name")
+                                   + " " + System.getProperty("os.arch"));
+              }
+            }
+            EOF
+            $OLDPWD/$J/bin/javac H.java && $OLDPWD/$J/bin/java H
+            cd $OLDPWD
+
+            # ここからが本題。tier1 を丸ごと回すのではなく、移植が足した
+            # ファイルを直接踏む三つだけを撃つ。
+            #
+            #   java/lang/ProcessHandle   ProcessHandleImpl_bsd.c
+            #                             (mainline に無く、870 行の片割れ)
+            #   java/nio/file             BsdFileSystemProvider、BsdFileStore、
+            #                             BsdNativeDispatcher、xattr の四引数版
+            #   java/nio/channels/Selector KQueueSelectorImpl、KQueuePoller
+            #
+            # tier1 は数時間かかる上に、落ちても移植のせいか上流のせいか
+            # 切り分けが要る。狙った所だけなら赤が出た時点で原因が絞れる。
+            wget -q -O /tmp/jtreg.zip \
+              https://builds.shipilev.net/jtreg/jtreg-7.5.1+1.zip
+            unzip -q /tmp/jtreg.zip -d /tmp
+            bash configure --with-jtreg=/tmp/jtreg \
+              --with-boot-jdk=/usr/local/openjdk26 \
+              --with-toolchain-type=clang --disable-dtrace \
+              --with-cups-include=/usr/local/include \
+              --with-freetype-include=/usr/local/include/freetype2 \
+              --with-freetype-lib=/usr/local/lib \
+              --with-fontconfig-include=/usr/local/include \
+              --x-includes=/usr/local/include --x-libraries=/usr/local/lib \
+              --disable-warnings-as-errors --with-jvm-variants=server \
+              > /tmp/conf2.log 2>&1 || { tail -20 /tmp/conf2.log; exit 1; }
+
+            T="${TESTS:-test/jdk/java/lang/ProcessHandle test/jdk/java/nio/file test/jdk/java/nio/channels/Selector}"
+            gmake test TEST="$T" > /tmp/test.log 2>&1 || true
+            echo "===== test の結果 ====="
+            sed -n '/==============================/,$p' /tmp/test.log | head -60
+            # 落ちた test の名前を出す。緑でないなら job も赤にする。
+            if grep -qE '^ *TEST STATS:.*fail=[1-9]|Test failures' /tmp/test.log; then
+              echo "--- 落ちたもの ---"
+              grep -E '^ *FAILED:' /tmp/test.log | head -30
+              exit 1
+            fi
+
+      - name: 結果
+        if: always()
+        run: echo "詳細は上の step の log"
