@@ -140,7 +140,7 @@ jobs:
             # tier1 は数時間かかる上に、落ちても移植のせいか上流のせいか
             # 切り分けが要る。狙った所だけなら赤が出た時点で原因が絞れる。
             wget -q -O /tmp/jtreg.zip \
-              https://builds.shipilev.net/jtreg/jtreg-7.5.1+1.zip
+              https://builds.shipilev.net/jtreg/jtreg-8.3+1.zip
             unzip -q /tmp/jtreg.zip -d /tmp
             bash configure --with-jtreg=/tmp/jtreg \
               --with-boot-jdk=/usr/local/openjdk26 \
