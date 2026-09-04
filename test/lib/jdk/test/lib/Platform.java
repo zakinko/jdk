@@ -117,6 +117,10 @@ public class Platform {
                 || isOs("openbsd") || isOs("dragonfly");
     }
 
+    public static boolean isOpenBsd() {
+        return isOs("openbsd");
+    }
+
     public static boolean isBusybox(String tool) {
         try {
             Path toolpath = Paths.get(tool);
