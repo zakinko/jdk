@@ -53,27 +53,27 @@ extract() {
 
 case "$os" in
   netbsd)
-    # comp holds the headers and the static libraries; xbase and xcomp hold
-    # X11, which java.desktop needs and which NetBSD ships apart from base.
+    # comp holds the headers and the static libraries.  The X11 sets are not
+    # fetched: the build is headless, see below.
     base=https://cdn.netbsd.org/pub/NetBSD/NetBSD-11.0/amd64/binary/sets
-    for set in base comp xbase xcomp; do
+    for set in base comp; do
       fetch "$set.tar.xz" "$base/$set.tar.xz"
       extract "$set.tar.xz"
     done
     ;;
 
   freebsd)
-    # FreeBSD puts everything in one base.txz, X11 included as headers only.
+    # FreeBSD puts the whole base system in one base.txz.
     base=https://download.freebsd.org/releases/amd64/15.1-RELEASE
     fetch base.txz "$base/base.txz"
     extract base.txz
     ;;
 
   openbsd)
-    # OpenBSD numbers its sets after the release: base79.tgz for 7.9.  comp
-    # carries the headers, xbase and xshare the X11 side.
+    # OpenBSD numbers its sets after the release: base79.tgz for 7.9, with
+    # comp79 carrying the headers.
     base=https://cdn.openbsd.org/pub/OpenBSD/7.9/amd64
-    for set in base79 comp79 xbase79 xshare79; do
+    for set in base79 comp79; do
       fetch "$set.tgz" "$base/$set.tgz"
       extract "$set.tgz"
     done
@@ -101,6 +101,11 @@ esac
 
 sudo chown -R "$USER" "$sysroot"
 
+# No BSD carries X11 in its base system either -- NetBSD and OpenBSD ship it
+# as separate sets, the others leave it to ports -- so the build is configured
+# headless and none of it is fetched.  What that gives up is the X11 half of
+# java.desktop; everything else, hotspot included, still gets compiled.
+#
 # Neither cups nor fontconfig is part of any BSD base system, and the JDK
 # needs their headers alone: both are opened with dlopen at run time.  The
 # Linux ones say the same thing.
