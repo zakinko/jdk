@@ -122,6 +122,25 @@ jint  IPv6_supported()
          */
         return JNI_FALSE;
     }
+
+    /*
+     * The rest of the networking code opens one AF_INET6 socket for
+     * everything and relies on it carrying IPv4 as well, which needs
+     * IPV6_V6ONLY off.  OpenBSD has no IPv4-mapped IPv6 addresses at all
+     * and fails the request with EINVAL rather than ignoring it, so a
+     * stack that will not do this is no use to us: report it as no IPv6
+     * stack and run over AF_INET, which is what OpenBSD's own build of
+     * the JDK arranges by defaulting java.net.preferIPv4Stack to true.
+     * The alternative is that every socket the VM opens throws.
+     */
+    {
+        int arg = 0;
+        if (setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, (char*)&arg,
+                       sizeof(arg)) < 0) {
+            close(fd);
+            return JNI_FALSE;
+        }
+    }
     close(fd);
 
     /**

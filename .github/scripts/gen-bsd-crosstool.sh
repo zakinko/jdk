@@ -89,8 +89,13 @@ W
   chmod +x "$bindir/$triple-$tool"
 done
 
+# Wrappers rather than symlinks: the LLVM binutils pick their mode out of
+# the name they are invoked by, and the FreeBSD triple has a version in it,
+# so llvm-ar called as x86_64-unknown-freebsd15.1-ar reads the ".1-ar" as a
+# suffix and refuses -- "error: not ranlib, ar, lib or dlltool".
 for tool in ar ranlib strip objcopy nm objdump; do
-  ln -sf "/usr/bin/llvm-$tool" "$bindir/$triple-$tool"
+  printf '#!/bin/sh\nexec /usr/bin/llvm-%s "$@"\n' "$tool" > "$bindir/$triple-$tool"
+  chmod +x "$bindir/$triple-$tool"
 done
 
 # Prove the wrapper links before configure spends ten minutes finding out.
