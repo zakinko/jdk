@@ -416,20 +416,9 @@ static int core_pread(int fd, void* buf, size_t len, off_t off) {
   return 0;
 }
 
-/* Reads from the core, or from the file the address belongs to. */
-static int core_read(struct ps_prochandle* ph, uintptr_t addr, void* buf, size_t len) {
-  map_info* m;
+/* The part of a read that the object on disk can answer, or -1. */
+static int lib_read(struct ps_prochandle* ph, uintptr_t addr, void* buf, size_t len) {
   lib_info* lib;
-
-  for (m = ph->maps; m != NULL; m = m->next) {
-    if (addr < m->vaddr || addr >= m->vaddr + m->memsz) {
-      continue;
-    }
-    if (addr + len > m->vaddr + m->filesz) {
-      break;    /* the core stops short here; try the file */
-    }
-    return core_pread(ph->core_fd, buf, len, m->offset + (off_t)(addr - m->vaddr));
-  }
 
   for (lib = ph->libs; lib != NULL; lib = lib->next) {
     seg_info* sg;
@@ -444,6 +433,64 @@ static int core_read(struct ps_prochandle* ph, uintptr_t addr, void* buf, size_t
     }
   }
   return -1;
+}
+
+/*
+ * Reads out of the core, out of the object on disk, or as zeroes,
+ * whichever the address calls for -- and a single read can need more than
+ * one of them, because the agent reads a page at a time and a PT_LOAD's
+ * filesz stops at the last byte the kernel had anything to say about.
+ * A page that straddles that end is the ordinary case, not an error.
+ */
+static int core_read(struct ps_prochandle* ph, uintptr_t addr, void* buf, size_t len) {
+  size_t done = 0;
+
+  while (done < len) {
+    uintptr_t a = addr + done;
+    size_t left = len - done;
+    char* dst = (char*)buf + done;
+    map_info* m;
+    size_t in, n;
+
+    for (m = ph->maps; m != NULL; m = m->next) {
+      if (a >= m->vaddr && a < m->vaddr + m->memsz) {
+        break;
+      }
+    }
+    if (m == NULL) {
+      /* Outside every PT_LOAD: only a mapped file can answer. */
+      if (lib_read(ph, a, dst, left) != 0) {
+        return -1;
+      }
+      return 0;
+    }
+
+    in = a - m->vaddr;
+    if (in < m->filesz) {
+      n = m->filesz - in;
+      if (n > left) {
+        n = left;
+      }
+      if (core_pread(ph->core_fd, dst, n, m->offset + (off_t)in) != 0) {
+        return -1;
+      }
+    } else {
+      /*
+       * Past what the core holds.  Either the page was file-backed and
+       * unmodified, so the file still has it, or it was anonymous and
+       * empty, so zeroes are what was there.
+       */
+      n = m->memsz - in;
+      if (n > left) {
+        n = left;
+      }
+      if (lib_read(ph, a, dst, n) != 0) {
+        memset(dst, 0, n);
+      }
+    }
+    done += n;
+  }
+  return 0;
 }
 
 static void add_map(struct ps_prochandle* ph, const Elf64_Phdr* ph_ent) {
