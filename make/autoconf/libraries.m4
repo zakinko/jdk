@@ -204,9 +204,12 @@ AC_DEFUN_ONCE([LIB_SETUP_MISC_LIBS],
     ICONV_LDFLAGS=
     ICONV_LIBS=-liconv
   else
+    # iconv is in libc on Linux and on most of the BSDs, but not on all of
+    # them: OpenBSD has it in a libiconv that lives with the packages rather
+    # than in the base system.  Ask which it is rather than assuming.
     ICONV_CFLAGS=
     ICONV_LDFLAGS=
-    ICONV_LIBS=
+    AC_CHECK_FUNC([iconv_open], [ICONV_LIBS=], [ICONV_LIBS=-liconv])
   fi
   AC_SUBST(ICONV_CFLAGS)
   AC_SUBST(ICONV_LDFLAGS)

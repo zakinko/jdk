@@ -23,6 +23,9 @@
  * questions.
  */
 
+// <sys/param.h> first: OpenBSD's <sys/mount.h> names u_char, uid_t and the
+// rest without pulling in what declares them.
+#include <sys/param.h>
 #include <sys/mount.h>
 
 #include "jni.h"
