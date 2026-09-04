@@ -138,6 +138,8 @@ jobs:
           --with-native-debug-symbols-level=1
           CC=${{ matrix.target-triple }}-clang
           CXX=${{ matrix.target-triple }}-clang++
+          BUILD_CC=clang
+          BUILD_CXX=clang++
           ${{ inputs.extra-conf-options }} ${{ inputs.configure-arguments }} || (
           echo "Dumping config.log:" &&
           cat config.log &&

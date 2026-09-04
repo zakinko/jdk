@@ -36,8 +36,19 @@ os="$1"
 sysroot="$2"
 mkdir -p "$sysroot"
 
+# --max-time so that a mirror that accepts the connection and then stops
+# sending fails the job rather than sitting there until the six hour
+# runner limit.
 fetch() {
-  curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors -o "$1" "$2"
+  echo "fetching $2"
+  curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
+      --max-time 1800 --speed-limit 10240 --speed-time 120 -o "$1" "$2"
+  ls -l "$1"
+}
+
+extract() {
+  echo "extracting $1"
+  sudo tar xf "$1" -C "$sysroot" "${@:2}"
 }
 
 case "$os" in
@@ -47,7 +58,7 @@ case "$os" in
     base=https://cdn.netbsd.org/pub/NetBSD/NetBSD-11.0/amd64/binary/sets
     for set in base comp xbase xcomp; do
       fetch "$set.tar.xz" "$base/$set.tar.xz"
-      sudo tar xJf "$set.tar.xz" -C "$sysroot"
+      extract "$set.tar.xz"
     done
     ;;
 
@@ -55,7 +66,7 @@ case "$os" in
     # FreeBSD puts everything in one base.txz, X11 included as headers only.
     base=https://download.freebsd.org/releases/amd64/15.1-RELEASE
     fetch base.txz "$base/base.txz"
-    sudo tar xJf base.txz -C "$sysroot"
+    extract base.txz
     ;;
 
   openbsd)
@@ -64,7 +75,7 @@ case "$os" in
     base=https://cdn.openbsd.org/pub/OpenBSD/7.9/amd64
     for set in base79 comp79 xbase79 xshare79; do
       fetch "$set.tgz" "$base/$set.tgz"
-      sudo tar xzf "$set.tgz" -C "$sysroot"
+      extract "$set.tgz"
     done
     ;;
 
@@ -76,8 +87,9 @@ case "$os" in
     base=https://mirror-master.dragonflybsd.org/iso-images
     fetch dfly.iso.bz2 "$base/dfly-x86_64-6.4.2_REL.iso.bz2"
     bunzip2 dfly.iso.bz2
-    bsdtar -xf dfly.iso -C "$sysroot" \
-        usr/include usr/lib usr/libdata/ldscripts lib
+    # No usr/libdata/ldscripts: the ISO does not carry it, and lld does not
+    # read linker scripts from the sysroot anyway.
+    bsdtar -xf dfly.iso -C "$sysroot" usr/include usr/lib lib
     rm -f dfly.iso
     ;;
 
