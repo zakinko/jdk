@@ -121,6 +121,8 @@ static void throw_new_debugger_exception(JNIEnv* env, const char* errMsg) {
  * becomes a runtime one by adding base and taking off the lowest vaddr
  * the file's PT_LOAD headers name.
  */
+struct map_info;
+
 typedef struct seg_info {
   uintptr_t        vaddr;   /* link-time address of the segment */
   size_t           filesz;
@@ -128,12 +130,21 @@ typedef struct seg_info {
   struct seg_info *next;
 } seg_info;
 
+/*
+ * base and end are the outermost bounds, which is what a load object is
+ * described by; ranges is what the object is actually mapped over.  The two
+ * are not the same and the difference matters: ld.elf_so puts other objects
+ * into the gap between an object's segments, so libjimage, libgcc, libm and
+ * libstdc++ all sat inside libjvm's bounds in one ordinary run.  Deciding
+ * which object an address belongs to by the bounds picks the wrong one.
+ */
 typedef struct lib_info {
   char             *name;
   uintptr_t         base;
   uintptr_t         end;
   int               fd;     /* open while reading a core; -1 for a live target */
   seg_info         *segs;
+  struct map_info  *ranges;
   struct lib_info  *next;
 } lib_info;
 
@@ -176,6 +187,29 @@ static pid_t get_pid(JNIEnv* env, jobject this_obj) {
 static const char* base_name(const char* path) {
   const char* slash = strrchr(path, '/');
   return slash == NULL ? path : slash + 1;
+}
+
+static void add_range(lib_info* lib, uintptr_t start, size_t len) {
+  map_info* r = (map_info*)calloc(1, sizeof(*r));
+
+  if (r == NULL) {
+    return;
+  }
+  r->vaddr = start;
+  r->memsz = len;
+  r->next = lib->ranges;
+  lib->ranges = r;
+}
+
+static int lib_contains(lib_info* lib, uintptr_t addr) {
+  map_info* r;
+
+  for (r = lib->ranges; r != NULL; r = r->next) {
+    if (addr >= r->vaddr && addr < r->vaddr + r->memsz) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 /* ---------------------------------------------------------------- ELF */
@@ -422,7 +456,7 @@ static int lib_read(struct ps_prochandle* ph, uintptr_t addr, void* buf, size_t 
 
   for (lib = ph->libs; lib != NULL; lib = lib->next) {
     seg_info* sg;
-    if (lib->fd < 0 || addr < lib->base || addr >= lib->end) {
+    if (lib->fd < 0 || !lib_contains(lib, addr)) {
       continue;
     }
     for (sg = lib->segs; sg != NULL; sg = sg->next) {
@@ -614,6 +648,7 @@ static void add_core_lib(struct ps_prochandle* ph, const char* path, uintptr_t l
       sg->next = lib->segs;
       lib->segs = sg;
     }
+    add_range(lib, l_addr + (uintptr_t)p->p_vaddr, (size_t)p->p_memsz);
   }
   munmap(addr, size);
 
@@ -852,10 +887,16 @@ static void free_libs(lib_info* lib) {
   while (lib != NULL) {
     lib_info* next = lib->next;
     seg_info* sg = lib->segs;
+    map_info* r = lib->ranges;
     while (sg != NULL) {
       seg_info* sgnext = sg->next;
       free(sg);
       sg = sgnext;
+    }
+    while (r != NULL) {
+      map_info* rnext = r->next;
+      free(r);
+      r = rnext;
     }
     if (lib->fd >= 0) {
       close(lib->fd);
@@ -912,6 +953,7 @@ static void add_mapping(struct ps_prochandle* ph, const char* path,
       if (end > lib->end) {
         lib->end = end;
       }
+      add_range(lib, start, (size_t)(end - start));
       return;
     }
   }
@@ -927,6 +969,7 @@ static void add_mapping(struct ps_prochandle* ph, const char* path,
   lib->base = start - offset;
   lib->end = end;
   lib->fd = -1;      /* a live target is read through ptrace, not the file */
+  add_range(lib, start, (size_t)(end - start));
   lib->next = ph->libs;
   ph->libs = lib;
 }
@@ -1213,7 +1256,7 @@ JNIEXPORT jobject JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_loo
     struct find_addr f;
     uintptr_t bias;
 
-    if (target < lib->base || target >= lib->end) {
+    if (!lib_contains(lib, target)) {
       continue;
     }
     if (map_file(lib->name, &addr, &size) != 0) {
