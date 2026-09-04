@@ -99,7 +99,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --only-upgrade apt
           sudo apt-get install clang lld llvm autoconf zip unzip file \
-              libcups2-dev libfontconfig1-dev
+              libarchive-tools libcups2-dev libfontconfig1-dev
 
       - name: 'Check cache for sysroot'
         id: get-cached-sysroot
@@ -115,8 +115,10 @@ jobs:
 
       - name: 'Prepare the cross compiler'
         id: cross
-        run: bash .github/scripts/gen-bsd-crosstool.sh '${{ matrix.target-os }}' \
-            '${{ matrix.target-triple }}' "$PWD/sysroot" "$PWD/cross-bin"
+        run: >
+          bash .github/scripts/gen-bsd-crosstool.sh
+          '${{ matrix.target-os }}' '${{ matrix.target-triple }}'
+          "$PWD/sysroot" "$PWD/cross-bin"
 
       - name: 'Configure'
         run: >
