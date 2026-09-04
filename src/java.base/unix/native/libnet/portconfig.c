@@ -60,6 +60,24 @@ static int getPortRange(struct portrange *range)
         }
         return -1;
     }
+#elif defined(__OpenBSD__)
+    {
+        // OpenBSD has no sysctlbyname(3); the pair is reached by its numbers,
+        // and it calls them portfirst/portlast.
+        int ret;
+        size_t size = sizeof(range->lower);
+        int lower_mib[4] = { CTL_NET, PF_INET, IPPROTO_IP,
+                             IPCTL_IPPORT_FIRSTAUTO };
+        int higher_mib[4] = { CTL_NET, PF_INET, IPPROTO_IP,
+                              IPCTL_IPPORT_LASTAUTO };
+
+        ret = sysctl(lower_mib, 4, &range->lower, &size, NULL, 0);
+        if (ret == -1) {
+            return -1;
+        }
+        size = sizeof(range->higher);
+        return sysctl(higher_mib, 4, &range->higher, &size, NULL, 0);
+    }
 #elif defined(_ALLBSD_SOURCE)
     {
         int ret;
