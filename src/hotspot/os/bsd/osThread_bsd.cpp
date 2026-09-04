@@ -24,6 +24,7 @@
 
 #include "memory/allocation.hpp"
 #include "runtime/mutex.hpp"
+#include "runtime/os.hpp"
 #include "runtime/osThread.hpp"
 
 #include <signal.h>
@@ -57,6 +58,13 @@ void OSThread::set_unique_thread_id() {
   mach_port_deallocate(mach_task_self(), mach_thread_port);
 
   _unique_thread_id = m_ident_info.thread_id;
+#else
+  // The other BSDs have no second identifier to correlate: the kernel's own
+  // id is the one ptrace(2) and the core file's per-thread notes use, and it
+  // is what os::current_thread_id() answers with.  Leaving this at 0 asked
+  // the agent for thread 0's registers for every thread, so a thread running
+  // Java code came out with no frames at all.
+  _unique_thread_id = (uint64_t)os::current_thread_id();
 #endif
 }
 
