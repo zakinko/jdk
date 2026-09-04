@@ -57,6 +57,10 @@
 #include <sys/ptrace.h>
 #include <sys/stat.h>
 #include <sys/sysctl.h>
+#ifdef __FreeBSD__
+/* FreeBSD keeps struct kinfo_vmentry here rather than in <sys/sysctl.h>. */
+#include <sys/user.h>
+#endif
 #include <sys/wait.h>
 #include <machine/reg.h>
 #ifdef __NetBSD__
@@ -79,6 +83,15 @@
 #else
 #include <util.h>
 #endif
+
+/*
+ * __cxa_demangle has C linkage even though it belongs to the C++ runtime,
+ * which is why libsaproc is linked with the C++ driver here as it is on
+ * Linux.  <cxxabi.h> itself is a C++ header, so the declaration is spelled
+ * out rather than included.
+ */
+extern char* __cxa_demangle(const char* mangled, char* buf, size_t* len,
+                            int* status);
 
 #include "sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal.h"
 #include "sun_jvm_hotspot_debugger_amd64_AMD64ThreadContext.h"
@@ -576,12 +589,21 @@ static void add_core_lib(struct ps_prochandle* ph, const char* path, uintptr_t l
  * its own -- there is no equivalent of Linux's NT_FILE -- so the only place
  * the shared objects are named is the link map the process itself was
  * holding, reached through the DT_DEBUG entry of the executable.
+ *
+ * The executable's own program headers are read out of the file rather than
+ * out of the core.  They sit in a read-only page, which the kernel leaves
+ * out because the file still has it, and at this point no load object is
+ * registered yet for the read to fall back on -- the very list this is
+ * about to build.
  */
 static void read_core_libs(struct ps_prochandle* ph, const char* execName,
-                           uintptr_t phdr_addr, size_t phent, size_t phnum) {
-  Elf64_Phdr* phdrs;
-  uintptr_t dyn_addr = 0, bias = 0;
-  size_t i;
+                           uintptr_t phdr_addr) {
+  char* addr;
+  size_t size;
+  const Elf64_Ehdr* eh;
+  uintptr_t bias = 0, dyn_addr = 0;
+  Elf64_Half i;
+  size_t j;
   Elf64_Dyn dyn;
   uintptr_t r_debug_addr = 0;
   struct r_debug dbg;
@@ -589,37 +611,44 @@ static void read_core_libs(struct ps_prochandle* ph, const char* execName,
   uintptr_t next;
   int guard = 0;
 
-  if (phent != sizeof(Elf64_Phdr) || phnum == 0 || phnum > 128) {
+  if (map_file(execName, &addr, &size) != 0) {
     return;
   }
-  phdrs = (Elf64_Phdr*)calloc(phnum, phent);
-  if (phdrs == NULL) {
+  if ((eh = elf_header(addr, size)) == NULL ||
+      eh->e_phoff + (size_t)eh->e_phnum * eh->e_phentsize > size) {
+    munmap(addr, size);
     return;
   }
-  if (core_read(ph, phdr_addr, phdrs, phnum * phent) != 0) {
-    free(phdrs);
-    return;
-  }
-  /* AT_PHDR says where the headers ended up; PT_PHDR says where they were
-     linked to be.  The difference is the bias, and it is 0 for the
-     non-PIE case where PT_PHDR is absent. */
-  for (i = 0; i < phnum; i++) {
-    if (phdrs[i].p_type == PT_PHDR) {
-      bias = phdr_addr - (uintptr_t)phdrs[i].p_vaddr;
+  /*
+   * AT_PHDR says where the headers ended up; PT_PHDR says where they were
+   * linked to be.  The difference is the bias, and there is none in the
+   * non-PIE case, where PT_PHDR is absent.
+   */
+  for (i = 0; i < eh->e_phnum; i++) {
+    const Elf64_Phdr* p =
+        (const Elf64_Phdr*)(addr + eh->e_phoff + (size_t)i * eh->e_phentsize);
+    if (p->p_type == PT_PHDR) {
+      bias = phdr_addr - (uintptr_t)p->p_vaddr;
     }
   }
-  for (i = 0; i < phnum; i++) {
-    if (phdrs[i].p_type == PT_DYNAMIC) {
-      dyn_addr = bias + (uintptr_t)phdrs[i].p_vaddr;
+  for (i = 0; i < eh->e_phnum; i++) {
+    const Elf64_Phdr* p =
+        (const Elf64_Phdr*)(addr + eh->e_phoff + (size_t)i * eh->e_phentsize);
+    if (p->p_type == PT_DYNAMIC) {
+      dyn_addr = bias + (uintptr_t)p->p_vaddr;
     }
   }
-  free(phdrs);
+  munmap(addr, size);
+
+  /* The executable goes in first, so that reads of it have a file to fall
+     back on while the rest of the list is being found. */
+  add_core_lib(ph, execName, bias);
   if (dyn_addr == 0) {
     return;
   }
 
-  for (i = 0; i < 4096; i++) {
-    if (core_read(ph, dyn_addr + i * sizeof(dyn), &dyn, sizeof(dyn)) != 0) {
+  for (j = 0; j < 4096; j++) {
+    if (core_read(ph, dyn_addr + j * sizeof(dyn), &dyn, sizeof(dyn)) != 0) {
       return;
     }
     if (dyn.d_tag == DT_NULL) {
@@ -644,7 +673,7 @@ static void read_core_libs(struct ps_prochandle* ph, const char* execName,
       return;
     }
     /* The first entry names the executable, and names it as the empty
-       string; the caller was told the path by the test harness. */
+       string; it is in the list already. */
     if (lm.l_name != NULL) {
       while (n + 1 < sizeof(path)) {
         if (core_read(ph, (uintptr_t)lm.l_name + n, &path[n], 1) != 0) {
@@ -657,7 +686,9 @@ static void read_core_libs(struct ps_prochandle* ph, const char* execName,
       }
     }
     path[n] = '\0';
-    add_core_lib(ph, n == 0 ? execName : path, (uintptr_t)lm.l_addr);
+    if (n > 0) {
+      add_core_lib(ph, path, (uintptr_t)lm.l_addr);
+    }
     next = (uintptr_t)lm.l_next;
   }
 }
@@ -667,7 +698,7 @@ static int open_core(struct ps_prochandle* ph, const char* execName,
                      const char* coreName) {
   Elf64_Ehdr eh;
   Elf64_Phdr* phdrs;
-  uintptr_t phdr_addr = 0, phent = 0, phnum = 0;
+  uintptr_t phdr_addr = 0, phent = 0, phnum = 0;   /* phent/phnum unused */
   Elf64_Half i;
 
   ph->core_fd = open(coreName, O_RDONLY);
@@ -714,8 +745,9 @@ static int open_core(struct ps_prochandle* ph, const char* execName,
   }
   free(phdrs);
 
+  (void)phent; (void)phnum;
   if (phdr_addr != 0) {
-    read_core_libs(ph, execName, phdr_addr, (size_t)phent, (size_t)phnum);
+    read_core_libs(ph, execName, phdr_addr);
   }
   return 0;
 }
@@ -1205,6 +1237,39 @@ JNIEXPORT jbyteArray JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_
   }
   (*env)->ReleaseByteArrayElements(env, array, buf, 0);
   return array;
+}
+
+/*
+ * Class:     sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal
+ * Method:    demangle
+ * Signature: (Ljava/lang/String;)Ljava/lang/String;
+ */
+JNIEXPORT jstring JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_demangle
+  (JNIEnv *env, jobject this_obj, jstring jsym) {
+  const char* sym;
+  char* demangled;
+  jstring result = NULL;
+  int status;
+
+  sym = (*env)->GetStringUTFChars(env, jsym, NULL);
+  CHECK_EXCEPTION_(NULL);
+  if (sym == NULL) {
+    return NULL;
+  }
+  demangled = __cxa_demangle(sym, NULL, NULL, &status);
+  (*env)->ReleaseStringUTFChars(env, jsym, sym);
+
+  if (demangled != NULL && status == 0) {
+    result = (*env)->NewStringUTF(env, demangled);
+    free(demangled);
+  } else if (status == -2) {
+    /* Not a C++ mangled name.  A C symbol, most likely; hand it back. */
+    result = jsym;
+  } else {
+    free(demangled);
+    THROW_NEW_DEBUGGER_EXCEPTION_("Could not demangle", NULL);
+  }
+  return result;
 }
 
 /*

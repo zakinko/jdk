@@ -49,7 +49,9 @@ else ifeq ($(call isTargetOs, windows), true)
   endif
 endif
 
-ifeq ($(call isTargetOs, linux), true)
+# The C++ driver, so that __cxa_demangle resolves.  macosx's OS is macosx
+# rather than bsd and keeps the C driver: its libsaproc does not demangle.
+ifeq ($(call isTargetOs, linux bsd), true)
   LIBSAPROC_LINK_TYPE := C++
 else
   LIBSAPROC_LINK_TYPE := C
