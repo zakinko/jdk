@@ -69,6 +69,7 @@
 #endif
 
 #include <elf.h>
+#include <stdint.h>
 #include <errno.h>
 #include <link.h>
 #include <fcntl.h>
@@ -96,6 +97,18 @@ extern char* __cxa_demangle(const char* mangled, char* buf, size_t* len,
 #include "sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal.h"
 #include "sun_jvm_hotspot_debugger_amd64_AMD64ThreadContext.h"
 
+/*
+ * NetBSD and FreeBSD only.
+ *
+ * OpenBSD's kinfo_vmentry carries no kve_path, so there is no way to learn
+ * which file is mapped where, and without that there are no load objects and
+ * no symbols -- the agent cannot get started.  Its struct reg also has
+ * neither r_trapno nor r_err.  DragonFly is untried.  Both get the same
+ * empty libsaproc they had before, rather than a half of one that claims to
+ * work.
+ */
+#if defined(__NetBSD__) || defined(__FreeBSD__)
+
 #define CHECK_EXCEPTION_(value) if ((*env)->ExceptionOccurred(env)) { return value; }
 #define CHECK_EXCEPTION if ((*env)->ExceptionOccurred(env)) { return; }
 #define THROW_NEW_DEBUGGER_EXCEPTION_(str, value) { \
@@ -122,6 +135,14 @@ static void throw_new_debugger_exception(JNIEnv* env, const char* errMsg) {
  * the file's PT_LOAD headers name.
  */
 struct map_info;
+
+/* OpenBSD names a thread by the id getthrid() returns and declares no
+   lwpid_t; NetBSD and FreeBSD both have one. */
+#ifdef __OpenBSD__
+typedef int sa_lwpid_t;
+#else
+typedef lwpid_t sa_lwpid_t;
+#endif
 
 typedef struct seg_info {
   uintptr_t        vaddr;   /* link-time address of the segment */
@@ -161,7 +182,7 @@ typedef struct map_info {
 } map_info;
 
 typedef struct thread_info {
-  lwpid_t             lwpid;
+  sa_lwpid_t          lwpid;
   struct reg          regs;
   struct thread_info *next;
 } thread_info;
@@ -618,7 +639,7 @@ static void parse_core_notes(struct ps_prochandle* ph, const char* notes, size_t
     if (lwpid != 0) {
       thread_info* t = (thread_info*)calloc(1, sizeof(*t));
       if (t != NULL) {
-        t->lwpid = (lwpid_t)lwpid;
+        t->lwpid = (sa_lwpid_t)lwpid;
         memcpy(&t->regs, desc, sizeof(t->regs));
         t->next = ph->threads;
         ph->threads = t;
@@ -1445,7 +1466,7 @@ JNIEXPORT jlongArray JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_
   } else {
     thread_info* t;
     for (t = ph->threads; t != NULL; t = t->next) {
-      if (t->lwpid == (lwpid_t)thread_id) {
+      if (t->lwpid == (sa_lwpid_t)thread_id) {
         break;
       }
     }
@@ -1508,3 +1529,5 @@ JNIEXPORT jlongArray JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_
   (*env)->ReleaseLongArrayElements(env, array, regs, 0);
   return array;
 }
+
+#endif /* __NetBSD__ || __FreeBSD__ */
