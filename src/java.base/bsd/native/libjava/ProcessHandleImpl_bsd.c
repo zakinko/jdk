@@ -412,17 +412,32 @@ void os_getCmdlineAndUserInfo(JNIEnv *env, jobject jinfo, pid_t pid) {
     char cmd[MAXPATHLEN];
     jstring cmdexe = NULL;
 
-    // Get the resolved name of the executable
+    // Get the resolved name of the executable.  NetBSD reaches both the
+    // path and the arguments through KERN_PROC_ARGS with the pid third,
+    // where FreeBSD and macOS reach them through KERN_PROC with the pid
+    // last.  Asking the wrong way is not an error there: the path lookup
+    // returns success having written nothing, so cmd kept whatever was on
+    // the stack, and the argument lookup answers EINVAL, which this code
+    // treats as "no arguments" and passes over in silence.
     size = sizeof(cmd);
     mib[0] = CTL_KERN;
+#ifdef __NetBSD__
+    mib[1] = KERN_PROC_ARGS;
+    mib[2] = pid;
+    mib[3] = KERN_PROC_PATHNAME;
+#else
     mib[1] = KERN_PROC;
     mib[2] = KERN_PROC_PATHNAME;
     mib[3] = pid;
+#endif
+    // Info is a snapshot of another process, which may exit at any point
+    // between one system call and the next.  NetBSD reports that race with
+    // whichever errno the failing step produced -- one loop calling info()
+    // on an exiting child saw ESRCH, EINVAL, EBUSY, ENOMEM and EFAULT --
+    // and none of them tells the caller anything to act on: there is simply
+    // no command line to report.  So the fields are left unset rather than
+    // the errno being turned into an exception.
     if (sysctl(mib, 4, cmd, &size, NULL, 0) == -1) {
-        if (errno != EINVAL && errno != ESRCH && errno != EPERM && errno != ENOENT) {
-            JNU_ThrowByNameWithLastError(env,
-                "java/lang/RuntimeException", "sysctl failed");
-        }
         return;
     }
     // Make sure it is null terminated
@@ -455,16 +470,18 @@ void os_getCmdlineAndUserInfo(JNIEnv *env, jobject jinfo, pid_t pid) {
         char *cp, *argsEnd = NULL;
 
         mib[0] = CTL_KERN;
+#ifdef __NetBSD__
+        mib[1] = KERN_PROC_ARGS;
+        mib[2] = pid;
+        mib[3] = KERN_PROC_ARGV;
+#else
         mib[1] = KERN_PROC;
         mib[2] = KERN_PROC_ARGS;
         mib[3] = pid;
+#endif
         size = (size_t) maxargs;
         if (sysctl(mib, 4, args, &size, NULL, 0) == -1) {
-            if (errno != EINVAL && errno != ESRCH && errno != EPERM && errno != ENOENT) {
-                JNU_ThrowByNameWithLastError(env,
-                    "java/lang/RuntimeException", "sysctl failed");
-            }
-            break;
+            break;      // the process is gone, or going; see above
         }
 
         // At this point args should hold a flattened argument string with

@@ -61,6 +61,18 @@ Java_sun_nio_ch_KQueue_flagsOffset(JNIEnv* env, jclass clazz)
 }
 
 JNIEXPORT jint JNICALL
+Java_sun_nio_ch_KQueue_filterRead(JNIEnv* env, jclass clazz)
+{
+    return EVFILT_READ;
+}
+
+JNIEXPORT jint JNICALL
+Java_sun_nio_ch_KQueue_filterWrite(JNIEnv* env, jclass clazz)
+{
+    return EVFILT_WRITE;
+}
+
+JNIEXPORT jint JNICALL
 Java_sun_nio_ch_KQueue_create(JNIEnv *env, jclass clazz) {
     int kqfd = kqueue();
     if (kqfd < 0) {
