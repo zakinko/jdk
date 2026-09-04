@@ -1560,7 +1560,7 @@ int os::get_loaded_modules_info(os::LoadedModulesCallbackFunc callback, void *pa
 
   while (map != nullptr) {
     // Value for top_address is returned as 0 since we don't have any information about module size
-    if (callback(map->l_name, (address)map->l_addr, (address)0, param)) {
+    if (callback(map->l_name, (address)map->l_addr, nullptr, param)) {
       dlclose(handle);
       return 1;
     }
@@ -1591,7 +1591,7 @@ void os::get_summary_os_info(char* buf, size_t buflen) {
   if (sysctl(mib_kern, 2, os, &size, nullptr, 0) < 0) {
 #ifdef __APPLE__
     strncpy(os, "Darwin", sizeof(os));
-#elif __OpenBSD__
+#elif defined(__OpenBSD__)
     strncpy(os, "OpenBSD", sizeof(os));
 #else
     strncpy(os, "BSD", sizeof(os));
@@ -2676,7 +2676,7 @@ static int get_default_core_path(char* buffer, size_t bufferSize) {
   if (!have_pattern) {
     // OpenBSD has no such knob, and this is what every one of them falls
     // back on anyway.
-    os::snprintf(pattern, sizeof(pattern), "%%n.core");
+    os::snprintf_checked(pattern, sizeof(pattern), "%%n.core");
   }
 
   // Only the escapes the defaults use are expanded.  Anything else is left
