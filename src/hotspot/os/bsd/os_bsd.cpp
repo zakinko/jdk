@@ -946,6 +946,8 @@ pid_t os::Bsd::gettid() {
   retval = getthrid();
 #elif defined(__NetBSD__)
   retval = (pid_t) _lwp_self();
+#elif defined(__DragonFly__)
+  retval = (pid_t) lwp_gettid();
 #else
 #error "unsupported OS"
 #endif
@@ -980,6 +982,29 @@ uid_t os::Bsd::get_process_uid(pid_t pid) {
   if (sysctl(mib_kern, 4, &kp, &size, nullptr, 0) == 0) {
     if (size > 0 && kp.ki_pid == pid) {
       return kp.ki_uid;
+    }
+  }
+#elif defined(__OpenBSD__)
+  // OpenBSD's struct kinfo_proc is flat like FreeBSD's but its fields carry
+  // a p_ prefix, and KERN_PROC there takes the size and count NetBSD's
+  // KERN_PROC2 takes.
+  struct kinfo_proc kp;
+  size_t size = sizeof kp;
+  int mib_kern[6] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid,
+                     (int)sizeof kp, 1};
+  if (sysctl(mib_kern, 6, &kp, &size, nullptr, 0) == 0) {
+    if (size > 0 && kp.p_pid == pid) {
+      return kp.p_uid;
+    }
+  }
+#elif defined(__DragonFly__)
+  // DragonFly's fields carry a kp_ prefix.
+  struct kinfo_proc kp;
+  size_t size = sizeof kp;
+  int mib_kern[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+  if (sysctl(mib_kern, 4, &kp, &size, nullptr, 0) == 0) {
+    if (size > 0 && kp.kp_pid == pid) {
+      return kp.kp_uid;
     }
   }
 #elif defined(__APPLE__)
