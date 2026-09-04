@@ -1070,26 +1070,15 @@ int os::Bsd::get_user_tmp_dir_macos(const char* user, int vmid, char* output_pat
 
 // The kernel's own id for the thread, so that the number hotspot reports as
 // nid is the one ps(1), the core file's per-thread notes and ptrace(2) all
-// use.  A cast pthread_self() is a pointer that names nothing outside the
-// process: the Serviceability Agent asks the kernel for a thread's registers
-// by this number, got ESRCH every time, and printed no frames at all for a
-// thread that was running Java code -- which only showed up under -Xcomp,
-// because a blocked thread is walked from its last Java frame anchor and
-// never needs the registers.
+// use.  os::Bsd::gettid() already answers with it on each of them.  A cast
+// pthread_self() is a pointer that names nothing outside the process: the
+// Serviceability Agent asks the kernel for a thread's registers by this
+// number, got ESRCH every time, and printed no frames at all for a thread
+// that was running Java code -- which only showed up under -Xcomp, because
+// a blocked thread is walked from its last Java frame anchor and never
+// needs the registers.
 intx os::current_thread_id() {
-#if defined(__APPLE__)
   return (intx)os::Bsd::gettid();
-#elif defined(__NetBSD__)
-  return (intx)::_lwp_self();
-#elif defined(__FreeBSD__)
-  return (intx)::pthread_getthreadid_np();
-#elif defined(__OpenBSD__)
-  return (intx)::getthrid();
-#elif defined(__DragonFly__)
-  return (intx)::lwp_gettid();
-#else
-  return (intx)::pthread_self();
-#endif
 }
 
 int os::current_process_id() {
