@@ -1,0 +1,31 @@
+name: bsd-cross
+
+# build-bsd.yml (上流へ出す形) をこの枝で実際に回すための入れ物。
+# workflow_call しか受けない再利用 workflow なので、そのままでは起動できない。
+on:
+  push:
+    branches: [netbsd-amd64-ci]
+    paths:
+      - '.github/workflows/build-bsd.yml'
+      - '.github/workflows/bsd-cross-test.yml'
+      - '.github/scripts/gen-bsd-*.sh'
+      - 'make/**'
+      - 'src/hotspot/os/bsd/**'
+      - 'src/hotspot/os/posix/**'
+      - 'src/hotspot/os_cpu/bsd_x86/**'
+      - 'src/java.base/bsd/**'
+      - 'src/java.base/unix/**'
+      - 'src/jdk.hotspot.agent/bsd/**'
+      - 'src/jdk.attach/bsd/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bsd:
+    uses: ./.github/workflows/build-bsd.yml
