@@ -201,6 +201,49 @@ static void add_range(lib_info* lib, uintptr_t start, size_t len) {
   lib->ranges = r;
 }
 
+/*
+ * ld.elf_so maps one more page of each object -- its first -- well away
+ * from the rest, so the outermost of an object's mappings reaches across
+ * everything the loader put in between:
+ *
+ *   0x7050ef1bc000-0x7050f0785000  libjvm.so     the object itself
+ *   0x7050f0e6a000-0x7050f0e72000  libjimage.so
+ *   0x7050f0f6b000-0x7050f118b000  libstdc++.so
+ *   0x7050f1190000-0x7050f1191000  libjvm.so     the stray page
+ *
+ * Describing libjvm as reaching to the stray page makes it contain three
+ * objects it has nothing to do with, and the agent's binary search over
+ * those bounds then answers with the wrong file -- an address in the C
+ * heap came back as "libjvm.so + 0x1cb8ffc".  The bounds are the run that
+ * starts at the object's own base and stays contiguous.
+ */
+static void set_bounds_to_contiguous_run(lib_info* lib) {
+  map_info* r;
+  uintptr_t start = (uintptr_t)-1;
+  uintptr_t end;
+  int extended;
+
+  for (r = lib->ranges; r != NULL; r = r->next) {
+    if (r->vaddr < start) {
+      start = r->vaddr;
+    }
+  }
+  if (start == (uintptr_t)-1) {
+    return;
+  }
+  end = start;
+  do {
+    extended = 0;
+    for (r = lib->ranges; r != NULL; r = r->next) {
+      if (r->vaddr <= end && r->vaddr + r->memsz > end) {
+        end = r->vaddr + r->memsz;
+        extended = 1;
+      }
+    }
+  } while (extended);
+  lib->end = end;
+}
+
 static int lib_contains(lib_info* lib, uintptr_t addr) {
   map_info* r;
 
@@ -999,6 +1042,7 @@ static void publish_load_objects(JNIEnv* env, jobject this_obj,
 static void fill_load_objects(JNIEnv* env, jobject this_obj,
                               struct ps_prochandle* ph) {
   struct kinfo_vmentry* vmmap;
+  lib_info* lib;
 #ifdef __FreeBSD__
   int nent = 0;
 #else
@@ -1019,6 +1063,9 @@ static void fill_load_objects(JNIEnv* env, jobject this_obj,
   }
   free(vmmap);
 
+  for (lib = ph->libs; lib != NULL; lib = lib->next) {
+    set_bounds_to_contiguous_run(lib);
+  }
   ph->libs = sort_libs_by_base(ph->libs);
   publish_load_objects(env, this_obj, ph);
 }
