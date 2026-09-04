@@ -459,6 +459,11 @@ void os::Bsd::init_thread_fpu_state(void) {
 }
 
 juint os::cpu_microcode_revision() {
+#ifdef __OpenBSD__
+  // OpenBSD has no sysctlbyname(3), and no machdep.cpu.microcode_version to
+  // ask for by any name.
+  return 0;
+#else
   juint result = 0;
   char data[8];
   size_t sz = sizeof(data);
@@ -468,6 +473,7 @@ juint os::cpu_microcode_revision() {
     if (sz == 8) result = *((juint*)data + 1); // upper 32-bits
   }
   return result;
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////

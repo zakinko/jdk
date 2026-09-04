@@ -105,9 +105,14 @@
 # include <time.h>
 # include <unistd.h>
 
-#if defined(__FreeBSD__) || defined(__NetBSD__)
+#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
   #include <elf.h>
   // Link_map lives in <link_elf.h>, which <link.h> pulls in.
+  #include <link.h>
+#elif defined(__OpenBSD__)
+  // OpenBSD's <elf.h> is libelf's and declares none of the Elf32_* types;
+  // they live here.
+  #include <sys/exec_elf.h>
   #include <link.h>
 #endif
 
