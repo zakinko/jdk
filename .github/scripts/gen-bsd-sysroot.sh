@@ -69,11 +69,16 @@ case "$os" in
     ;;
 
   dragonfly)
-    # DragonFly ships its base as one image rather than as sets, so the
-    # sysroot comes out of the release ISO's own base tarball.
+    # DragonFly publishes no distribution sets: the release is an ISO or a
+    # disk image and nothing else.  The ISO is cd9660 and libarchive reads
+    # that directly, so the headers and libraries come straight out of it
+    # without a loop mount.
     base=https://mirror-master.dragonflybsd.org/iso-images
-    fetch dfly.tar.bz2 "$base/dfly-x86_64-6.4.2_REL.tar.bz2"
-    sudo tar xjf dfly.tar.bz2 -C "$sysroot"
+    fetch dfly.iso.bz2 "$base/dfly-x86_64-6.4.2_REL.iso.bz2"
+    bunzip2 dfly.iso.bz2
+    bsdtar -xf dfly.iso -C "$sysroot" \
+        usr/include usr/lib usr/libdata/ldscripts lib
+    rm -f dfly.iso
     ;;
 
   *)
