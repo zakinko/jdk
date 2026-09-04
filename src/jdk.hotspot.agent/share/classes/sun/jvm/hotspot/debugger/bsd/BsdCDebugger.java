@@ -122,10 +122,10 @@ class BsdCDebugger implements CDebugger {
   }
 
   public boolean canDemangle() {
-    return false;
+    return dbg.canDemangle();
   }
 
   public String demangle(String sym) {
-    throw new UnsupportedOperationException();
+    return dbg.demangle(sym);
   }
 }
