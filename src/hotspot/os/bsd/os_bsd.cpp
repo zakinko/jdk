@@ -570,10 +570,9 @@ static void *thread_native_entry(Thread *thread) {
 
   osthread->set_thread_id(os::Bsd::gettid());
 
-#ifdef __APPLE__
-  // Store unique OS X thread id used by SA
+  // The id the SA correlates threads by.  macosx has a second, mach one;
+  // the other BSDs answer with the same kernel id set just above.
   osthread->set_unique_thread_id();
-#endif
 
   // initialize signal mask for this thread
   PosixSignals::hotspot_sigmask(thread);
@@ -739,10 +738,9 @@ bool os::create_attached_thread(JavaThread* thread) {
 
   osthread->set_thread_id(os::Bsd::gettid());
 
-#ifdef __APPLE__
-  // Store unique OS X thread id used by SA
+  // The id the SA correlates threads by.  macosx has a second, mach one;
+  // the other BSDs answer with the same kernel id set just above.
   osthread->set_unique_thread_id();
-#endif
 
   // Store pthread info into the OSThread
   osthread->set_pthread_id(::pthread_self());
@@ -872,9 +870,25 @@ pid_t os::Bsd::gettid() {
   }
 }
 
+// The kernel's own id for the thread, so that the number hotspot reports as
+// nid is the one ps(1), the core file's per-thread notes and ptrace(2) all
+// use.  A cast pthread_self() is a pointer that names nothing outside the
+// process: the Serviceability Agent asks the kernel for a thread's registers
+// by this number, got ESRCH every time, and printed no frames at all for a
+// thread that was running Java code -- which only showed up under -Xcomp,
+// because a blocked thread is walked from its last Java frame anchor and
+// never needs the registers.
 intx os::current_thread_id() {
-#ifdef __APPLE__
+#if defined(__APPLE__)
   return (intx)os::Bsd::gettid();
+#elif defined(__NetBSD__)
+  return (intx)::_lwp_self();
+#elif defined(__FreeBSD__)
+  return (intx)::pthread_getthreadid_np();
+#elif defined(__OpenBSD__)
+  return (intx)::getthrid();
+#elif defined(__DragonFly__)
+  return (intx)::lwp_gettid();
 #else
   return (intx)::pthread_self();
 #endif
@@ -947,6 +961,30 @@ bool os::dll_address_to_function_name(address addr, char *buf,
   Dl_info dlinfo;
 
   if (local_dladdr((void*)addr, &dlinfo) != 0) {
+#ifndef __APPLE__
+    // The 6-parameter Decoder::decode() function is not implemented on macOS.
+    // The Mach-O binary format does not contain a "list of files" with address
+    // ranges like ELF. That makes sense since Mach-O can contain binaries for
+    // than one instruction set so there can be more than one address range for
+    // each "file".
+
+    // The ELF decoder is asked before dladdr's own answer, because the BSD
+    // dladdr(3) hands back the nearest preceding exported symbol however far
+    // off it is, where glibc's bounds the answer by the symbol's size and
+    // reports nothing when the address falls inside no symbol at all.  Taking
+    // its word names every frame in libjvm.so after whichever few symbols the
+    // version script exports: one hs_err stack came out as three consecutive
+    // frames called AsyncGetCallTrace+0x15d870, JNI_GetCreatedJavaVMs+0x184b3
+    // and JNI_GetCreatedJavaVMs+0x1aa59.  The decoder reads .symtab from the
+    // file and names the function the address is really in.
+    if (dlinfo.dli_fname != nullptr && dlinfo.dli_fbase != nullptr) {
+      if (Decoder::decode((address)(addr - (address)dlinfo.dli_fbase),
+                          buf, buflen, offset, dlinfo.dli_fname, demangle)) {
+        return true;
+      }
+    }
+#endif
+
     // see if we have a matching symbol
     if (dlinfo.dli_saddr != nullptr && dlinfo.dli_sname != nullptr) {
       if (!(demangle && Decoder::demangle(dlinfo.dli_sname, buf, buflen))) {
@@ -956,22 +994,7 @@ bool os::dll_address_to_function_name(address addr, char *buf,
       return true;
     }
 
-#ifndef __APPLE__
-    // The 6-parameter Decoder::decode() function is not implemented on macOS.
-    // The Mach-O binary format does not contain a "list of files" with address
-    // ranges like ELF. That makes sense since Mach-O can contain binaries for
-    // than one instruction set so there can be more than one address range for
-    // each "file".
-
-    // no matching symbol so try for just file info
-    if (dlinfo.dli_fname != nullptr && dlinfo.dli_fbase != nullptr) {
-      if (Decoder::decode((address)(addr - (address)dlinfo.dli_fbase),
-                          buf, buflen, offset, dlinfo.dli_fname, demangle)) {
-        return true;
-      }
-    }
-
-#else  // __APPLE__
+#ifdef __APPLE__
     #define MACH_MAXSYMLEN 256
 
     char localbuf[MACH_MAXSYMLEN];
