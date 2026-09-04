@@ -49,7 +49,9 @@ else ifeq ($(call isTargetOs, windows), true)
 endif
 
 SA_TOOLCHAIN := $(TOOLCHAIN_DEFAULT)
-ifeq ($(call isTargetOs, linux), true)
+# The C++ driver, so that __cxa_demangle resolves.  macosx's OS is macosx
+# rather than bsd and keeps the C driver: its libsaproc does not demangle.
+ifeq ($(call isTargetOs, linux bsd), true)
   SA_TOOLCHAIN := TOOLCHAIN_LINK_CXX
 endif
 
