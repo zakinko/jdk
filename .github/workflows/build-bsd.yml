@@ -131,6 +131,7 @@ jobs:
           --openjdk-target=${{ matrix.target-triple }}
           --with-sysroot=$PWD/sysroot
           --with-toolchain-type=clang
+          --with-freetype=bundled
           --disable-dtrace
           --disable-precompiled-headers
           --with-jmod-compress=zip-1
