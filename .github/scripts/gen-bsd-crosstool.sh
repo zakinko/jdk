@@ -78,7 +78,11 @@ for tool in clang clang++; do
   esac
   cat > "$bindir/$triple-$tool" <<W
 #!/bin/sh
+# -Wno-unused-command-line-argument: the linker flags below are passed on
+# every invocation, including the compile-only ones, and the JDK builds
+# with warnings as errors.
 exec /usr/bin/$tool --target=$triple --sysroot=$sysroot \\
+  -Wno-unused-command-line-argument \\
   $rt_extra -fuse-ld=lld $extra \\
   -include $fixups "\$@" $link_extra
 W
