@@ -132,6 +132,7 @@ jobs:
           --with-sysroot=$PWD/sysroot
           --with-toolchain-type=clang
           --with-freetype=bundled
+          --enable-headless-only
           --disable-dtrace
           --disable-precompiled-headers
           --with-jmod-compress=zip-1
@@ -150,6 +151,6 @@ jobs:
         id: build
         uses: ./.github/actions/do-build
         with:
-          make-target: 'hotspot ${{ inputs.make-arguments }}'
+          make-target: 'images ${{ inputs.make-arguments }}'
           platform: ${{ matrix.conf-name }}
         if: inputs.dry-run == false
