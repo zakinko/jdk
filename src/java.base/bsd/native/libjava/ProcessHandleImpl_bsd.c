@@ -430,11 +430,14 @@ void os_getCmdlineAndUserInfo(JNIEnv *env, jobject jinfo, pid_t pid) {
     mib[2] = KERN_PROC_PATHNAME;
     mib[3] = pid;
 #endif
+    // Info is a snapshot of another process, which may exit at any point
+    // between one system call and the next.  NetBSD reports that race with
+    // whichever errno the failing step produced -- one loop calling info()
+    // on an exiting child saw ESRCH, EINVAL, EBUSY, ENOMEM and EFAULT --
+    // and none of them tells the caller anything to act on: there is simply
+    // no command line to report.  So the fields are left unset rather than
+    // the errno being turned into an exception.
     if (sysctl(mib, 4, cmd, &size, NULL, 0) == -1) {
-        if (errno != EINVAL && errno != ESRCH && errno != EPERM && errno != ENOENT) {
-            JNU_ThrowByNameWithLastError(env,
-                "java/lang/RuntimeException", "sysctl failed");
-        }
         return;
     }
     // Make sure it is null terminated
@@ -478,11 +481,7 @@ void os_getCmdlineAndUserInfo(JNIEnv *env, jobject jinfo, pid_t pid) {
 #endif
         size = (size_t) maxargs;
         if (sysctl(mib, 4, args, &size, NULL, 0) == -1) {
-            if (errno != EINVAL && errno != ESRCH && errno != EPERM && errno != ENOENT) {
-                JNU_ThrowByNameWithLastError(env,
-                    "java/lang/RuntimeException", "sysctl failed");
-            }
-            break;
+            break;      // the process is gone, or going; see above
         }
 
         // At this point args should hold a flattened argument string with
