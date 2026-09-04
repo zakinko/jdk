@@ -578,10 +578,9 @@ static void *thread_native_entry(Thread *thread) {
 
   osthread->set_thread_id(os::Bsd::gettid());
 
-#ifdef __APPLE__
-  // Store unique OS X thread id used by SA
+  // The id the SA correlates threads by.  macosx has a second, mach one;
+  // the other BSDs answer with the same kernel id set just above.
   osthread->set_unique_thread_id();
-#endif
 
   // initialize signal mask for this thread
   PosixSignals::hotspot_sigmask(thread);
@@ -726,10 +725,9 @@ bool os::create_attached_thread(JavaThread* thread) {
 
   osthread->set_thread_id(os::Bsd::gettid());
 
-#ifdef __APPLE__
-  // Store unique OS X thread id used by SA
+  // The id the SA correlates threads by.  macosx has a second, mach one;
+  // the other BSDs answer with the same kernel id set just above.
   osthread->set_unique_thread_id();
-#endif
 
   // Store pthread info into the OSThread
   osthread->set_pthread_id(::pthread_self());
@@ -911,9 +909,25 @@ pid_t os::Bsd::gettid() {
   }
 }
 
+// The kernel's own id for the thread, so that the number hotspot reports as
+// nid is the one ps(1), the core file's per-thread notes and ptrace(2) all
+// use.  A cast pthread_self() is a pointer that names nothing outside the
+// process: the Serviceability Agent asks the kernel for a thread's registers
+// by this number, got ESRCH every time, and printed no frames at all for a
+// thread that was running Java code -- which only showed up under -Xcomp,
+// because a blocked thread is walked from its last Java frame anchor and
+// never needs the registers.
 intx os::current_thread_id() {
-#ifdef __APPLE__
+#if defined(__APPLE__)
   return (intx)os::Bsd::gettid();
+#elif defined(__NetBSD__)
+  return (intx)::_lwp_self();
+#elif defined(__FreeBSD__)
+  return (intx)::pthread_getthreadid_np();
+#elif defined(__OpenBSD__)
+  return (intx)::getthrid();
+#elif defined(__DragonFly__)
+  return (intx)::lwp_gettid();
 #else
   return (intx)::pthread_self();
 #endif
