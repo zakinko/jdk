@@ -234,6 +234,11 @@ define AddJdkLibrary
   ifeq ($(call isTargetOs, aix)+$$($1_$2_MODULE):$$($1_$2_NAME), true+java.base:jli)
     $1_$2_STATIC_LIBRARY := true
   endif
+  # OpenBSD's ld.so expands $ORIGIN nowhere, so libjli is static there for the
+  # same reason it is on AIX; see CoreLibraries.gmk.
+  ifeq ($(OPENJDK_TARGET_OS_ENV)+$$($1_$2_MODULE):$$($1_$2_NAME), bsd.openbsd+java.base:jli)
+    $1_$2_STATIC_LIBRARY := true
+  endif
   ifeq ($$($1_$2_MODULE):$$($1_$2_NAME), gtest:gtest)
     $1_$2_STATIC_LIBRARY := true
   endif

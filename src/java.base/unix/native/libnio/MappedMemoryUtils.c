@@ -59,6 +59,13 @@ jboolean JNICALL MappedMemoryUtils_isLoaded0(JNIEnv *env, jobject obj, jlong add
     }
 
     vec[numPages] = '\x7f'; /* Write sentinel. */
+#ifdef __OpenBSD__
+    /* OpenBSD removed mincore(2).  isLoaded() is a hint, and the honest
+       answer where there is no way to ask is that nothing is known to be
+       resident. */
+    free(vec);
+    return JNI_FALSE;
+#else
     result = mincore(a, (size_t)len, vec);
     assert(vec[numPages] == '\x7f'); /* Check sentinel. */
 
@@ -76,6 +83,7 @@ jboolean JNICALL MappedMemoryUtils_isLoaded0(JNIEnv *env, jobject obj, jlong add
     }
     free(vec);
     return loaded;
+#endif
 }
 
 

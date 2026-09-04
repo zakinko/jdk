@@ -85,7 +85,12 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-#include <utmpx.h>
+#ifdef __OpenBSD__
+  // OpenBSD carries no utmpx; print_uptime_info() asks the kernel there.
+  #include <sys/sysctl.h>
+#else
+  #include <utmpx.h>
+#endif
 
 #ifdef __APPLE__
   #include <crt_externs.h>
@@ -175,7 +180,9 @@ void os::check_core_dump_prerequisites(char* buffer, size_t bufferSize, bool che
 
 bool os::first_resident_in_range(address start, size_t size, address& resident_start, size_t& resident_size) {
 
-#ifdef _AIX
+#if defined(_AIX) || defined(__OpenBSD__)
+  // OpenBSD removed mincore(2), so there is no way to ask which pages are
+  // resident; answer as AIX does, that the whole range is.
   resident_start = start;
   resident_size = size;
   return true;
@@ -437,6 +444,12 @@ static int util_posix_fallocate(int fd, off_t offset, off_t len) {
     return ftruncate(fd, len);
   }
   return -1;
+#elif defined(__OpenBSD__)
+  // OpenBSD has no posix_fallocate at all.  ftruncate gives a file of the
+  // right size and gives up the guarantee that the space is there, which is
+  // the trade the other arms here make when the file system says it cannot
+  // preallocate.
+  return ftruncate(fd, offset + len) == 0 ? 0 : errno;
 #elif defined(_ALLBSD_SOURCE)
   // NetBSD, FreeBSD and OpenBSD answer EOPNOTSUPP for a file system that
   // cannot preallocate -- FFS is one -- rather than filling the range in
@@ -585,6 +598,17 @@ void os::Posix::print_load_average(outputStream* st) {
 void os::Posix::print_uptime_info(outputStream* st) {
   int bootsec = -1;
   time_t currsec = time(nullptr);
+#ifdef __OpenBSD__
+  // No utmpx here.  KERN_BOOTTIME is what the kernel actually knows, and is
+  // the answer the utx chain is standing in for -- badly, per the note
+  // above.
+  struct timeval boottime;
+  size_t size = sizeof(boottime);
+  int mib[2] = { CTL_KERN, KERN_BOOTTIME };
+  if (sysctl(mib, 2, &boottime, &size, nullptr, 0) == 0 && size > 0) {
+    bootsec = (int)boottime.tv_sec;
+  }
+#else
   struct utmpx* ent;
   setutxent();
   while ((ent = getutxent())) {
@@ -593,6 +617,7 @@ void os::Posix::print_uptime_info(outputStream* st) {
       break;
     }
   }
+#endif
 
   if (bootsec != -1) {
     os::print_dhm(st, "OS uptime:", currsec-bootsec);
@@ -639,7 +664,10 @@ void os::Posix::print_rlimit_info(outputStream* st) {
 #endif
 
   print_rlimit(st, ", NOFILE", RLIMIT_NOFILE);
+#ifdef RLIMIT_AS
+  // OpenBSD limits the data segment but has no address-space limit.
   print_rlimit(st, ", AS", RLIMIT_AS, true);
+#endif
   print_rlimit(st, ", CPU", RLIMIT_CPU);
   print_rlimit(st, ", DATA", RLIMIT_DATA, true);
 
@@ -821,6 +849,10 @@ size_t os::commit_memory_limit() {
 }
 
 size_t os::reserve_memory_limit() {
+#ifndef RLIMIT_AS
+  // OpenBSD has no address-space limit to read.
+  return SIZE_MAX;
+#else
   struct rlimit rlim;
   int getrlimit_res = getrlimit(RLIMIT_AS, &rlim);
 
@@ -836,6 +868,7 @@ size_t os::reserve_memory_limit() {
 
   // No limit
   return SIZE_MAX;
+#endif
 }
 
 void* os::get_default_process_handle() {

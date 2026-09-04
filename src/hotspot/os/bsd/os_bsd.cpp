@@ -105,9 +105,14 @@
 # include <time.h>
 # include <unistd.h>
 
-#if defined(__FreeBSD__) || defined(__NetBSD__)
+#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
   #include <elf.h>
   // Link_map lives in <link_elf.h>, which <link.h> pulls in.
+  #include <link.h>
+#elif defined(__OpenBSD__)
+  // OpenBSD's <elf.h> is libelf's and declares none of the Elf32_* types;
+  // they live here.
+  #include <sys/exec_elf.h>
   #include <link.h>
 #endif
 
@@ -946,6 +951,8 @@ pid_t os::Bsd::gettid() {
   retval = getthrid();
 #elif defined(__NetBSD__)
   retval = (pid_t) _lwp_self();
+#elif defined(__DragonFly__)
+  retval = (pid_t) lwp_gettid();
 #else
 #error "unsupported OS"
 #endif
@@ -980,6 +987,29 @@ uid_t os::Bsd::get_process_uid(pid_t pid) {
   if (sysctl(mib_kern, 4, &kp, &size, nullptr, 0) == 0) {
     if (size > 0 && kp.ki_pid == pid) {
       return kp.ki_uid;
+    }
+  }
+#elif defined(__OpenBSD__)
+  // OpenBSD's struct kinfo_proc is flat like FreeBSD's but its fields carry
+  // a p_ prefix, and KERN_PROC there takes the size and count NetBSD's
+  // KERN_PROC2 takes.
+  struct kinfo_proc kp;
+  size_t size = sizeof kp;
+  int mib_kern[6] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid,
+                     (int)sizeof kp, 1};
+  if (sysctl(mib_kern, 6, &kp, &size, nullptr, 0) == 0) {
+    if (size > 0 && kp.p_pid == pid) {
+      return kp.p_uid;
+    }
+  }
+#elif defined(__DragonFly__)
+  // DragonFly's fields carry a kp_ prefix.
+  struct kinfo_proc kp;
+  size_t size = sizeof kp;
+  int mib_kern[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+  if (sysctl(mib_kern, 4, &kp, &size, nullptr, 0) == 0) {
+    if (size > 0 && kp.kp_pid == pid) {
+      return kp.kp_uid;
     }
   }
 #elif defined(__APPLE__)
@@ -1070,26 +1100,15 @@ int os::Bsd::get_user_tmp_dir_macos(const char* user, int vmid, char* output_pat
 
 // The kernel's own id for the thread, so that the number hotspot reports as
 // nid is the one ps(1), the core file's per-thread notes and ptrace(2) all
-// use.  A cast pthread_self() is a pointer that names nothing outside the
-// process: the Serviceability Agent asks the kernel for a thread's registers
-// by this number, got ESRCH every time, and printed no frames at all for a
-// thread that was running Java code -- which only showed up under -Xcomp,
-// because a blocked thread is walked from its last Java frame anchor and
-// never needs the registers.
+// use.  os::Bsd::gettid() already answers with it on each of them.  A cast
+// pthread_self() is a pointer that names nothing outside the process: the
+// Serviceability Agent asks the kernel for a thread's registers by this
+// number, got ESRCH every time, and printed no frames at all for a thread
+// that was running Java code -- which only showed up under -Xcomp, because
+// a blocked thread is walked from its last Java frame anchor and never
+// needs the registers.
 intx os::current_thread_id() {
-#if defined(__APPLE__)
   return (intx)os::Bsd::gettid();
-#elif defined(__NetBSD__)
-  return (intx)::_lwp_self();
-#elif defined(__FreeBSD__)
-  return (intx)::pthread_getthreadid_np();
-#elif defined(__OpenBSD__)
-  return (intx)::getthrid();
-#elif defined(__DragonFly__)
-  return (intx)::lwp_gettid();
-#else
-  return (intx)::pthread_self();
-#endif
 }
 
 int os::current_process_id() {

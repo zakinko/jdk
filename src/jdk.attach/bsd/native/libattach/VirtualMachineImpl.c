@@ -138,6 +138,17 @@ JNIEXPORT jboolean JNICALL Java_sun_tools_attach_VirtualMachineImpl_checkCatches
 
     struct kinfo_proc2 kiproc;
     size_t             kipsz = sizeof(struct kinfo_proc2);
+#elif defined(__OpenBSD__)
+    /*
+     * OpenBSD's struct kinfo_proc is flat like FreeBSD's but its fields carry
+     * a p_ prefix, its signal sets are plain 32-bit masks, and KERN_PROC there
+     * takes the size and count NetBSD's KERN_PROC2 takes.
+     */
+    int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, (int)pid,
+                  (int)sizeof(struct kinfo_proc), 1 };
+
+    struct kinfo_proc kiproc;
+    size_t            kipsz = sizeof(struct kinfo_proc);
 #else
     int mib[] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, (int)pid };
 
@@ -167,6 +178,10 @@ JNIEXPORT jboolean JNICALL Java_sun_tools_attach_VirtualMachineImpl_checkCatches
         // 32-bit words as well; SIGQUIT is in the first.
         const bool ignored = (kiproc.ki_sigignore.__bits[0] & sigmask(SIGQUIT)) != 0;
         const bool caught  = (kiproc.ki_sigcatch.__bits[0] & sigmask(SIGQUIT))  != 0;
+#elif defined(__OpenBSD__)
+        // Plain 32-bit masks, reached without a nested struct.
+        const bool ignored = (kiproc.p_sigignore & sigmask(SIGQUIT)) != 0;
+        const bool caught  = (kiproc.p_sigcatch & sigmask(SIGQUIT))  != 0;
 #else
         const bool ignored = (kiproc.kp_proc.p_sigignore & sigmask(SIGQUIT)) != 0;
         const bool caught  = (kiproc.kp_proc.p_sigcatch & sigmask(SIGQUIT))  != 0;
