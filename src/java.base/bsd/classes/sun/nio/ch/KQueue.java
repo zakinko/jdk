@@ -52,9 +52,13 @@ class KQueue {
     private static final int OFFSET_FILTER         = filterOffset();
     private static final int OFFSET_FLAGS          = flagsOffset();
 
-    // filters
-    static final int EVFILT_READ  = -1;
-    static final int EVFILT_WRITE = -2;
+    // filters.  NetBSD numbers its filters upwards from 0 where macOS,
+    // FreeBSD and the rest number them downwards from -1, so the values
+    // come from the header rather than from here; registering with the
+    // wrong one is an EINVAL that KQueueSelectorImpl does not look at, so
+    // a selector would simply never report anything ready.
+    static final int EVFILT_READ  = filterRead();
+    static final int EVFILT_WRITE = filterWrite();
 
     // flags
     static final int EV_ADD     = 0x0001;
@@ -107,6 +111,10 @@ class KQueue {
     private static native int filterOffset();
 
     private static native int flagsOffset();
+
+    private static native int filterRead();
+
+    private static native int filterWrite();
 
     static native int create() throws IOException;
 
