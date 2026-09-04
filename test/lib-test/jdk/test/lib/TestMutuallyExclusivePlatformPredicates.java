@@ -50,10 +50,14 @@ public class TestMutuallyExclusivePlatformPredicates {
         OS("isAix", "isBsd", "isLinux", "isOSX", "isWindows"),
         VM_TYPE("isClient", "isServer", "isMinimal", "isZero", "isEmbedded"),
         MODE("isInt", "isMixed", "isComp"),
+        // isOpenBsd is ignored rather than sitting in OS: it names one of the
+        // systems isBsd covers, so the two are true together and the group is
+        // checked for mutual exclusion.
         IGNORED("isDebugBuild", "isFastDebugBuild", "isMusl",
                 "isStatic", "isSlowDebugBuild", "hasSA", "isRoot", "isTieredSupported",
                 "areCustomLoadersSupportedForCDS", "isDefaultCDSArchiveSupported",
-                "isHardenedOSX", "hasOSXPlistEntries", "isOracleLinux7", "isOnWayland");
+                "isHardenedOSX", "hasOSXPlistEntries", "isOracleLinux7", "isOnWayland",
+                "isOpenBsd");
 
         public final List<String> methodNames;
 
