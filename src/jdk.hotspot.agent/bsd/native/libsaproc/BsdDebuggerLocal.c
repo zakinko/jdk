@@ -121,6 +121,8 @@ static void throw_new_debugger_exception(JNIEnv* env, const char* errMsg) {
  * becomes a runtime one by adding base and taking off the lowest vaddr
  * the file's PT_LOAD headers name.
  */
+struct map_info;
+
 typedef struct seg_info {
   uintptr_t        vaddr;   /* link-time address of the segment */
   size_t           filesz;
@@ -128,12 +130,21 @@ typedef struct seg_info {
   struct seg_info *next;
 } seg_info;
 
+/*
+ * base and end are the outermost bounds, which is what a load object is
+ * described by; ranges is what the object is actually mapped over.  The two
+ * are not the same and the difference matters: ld.elf_so puts other objects
+ * into the gap between an object's segments, so libjimage, libgcc, libm and
+ * libstdc++ all sat inside libjvm's bounds in one ordinary run.  Deciding
+ * which object an address belongs to by the bounds picks the wrong one.
+ */
 typedef struct lib_info {
   char             *name;
   uintptr_t         base;
   uintptr_t         end;
   int               fd;     /* open while reading a core; -1 for a live target */
   seg_info         *segs;
+  struct map_info  *ranges;
   struct lib_info  *next;
 } lib_info;
 
@@ -176,6 +187,72 @@ static pid_t get_pid(JNIEnv* env, jobject this_obj) {
 static const char* base_name(const char* path) {
   const char* slash = strrchr(path, '/');
   return slash == NULL ? path : slash + 1;
+}
+
+static void add_range(lib_info* lib, uintptr_t start, size_t len) {
+  map_info* r = (map_info*)calloc(1, sizeof(*r));
+
+  if (r == NULL) {
+    return;
+  }
+  r->vaddr = start;
+  r->memsz = len;
+  r->next = lib->ranges;
+  lib->ranges = r;
+}
+
+/*
+ * ld.elf_so maps one more page of each object -- its first -- well away
+ * from the rest, so the outermost of an object's mappings reaches across
+ * everything the loader put in between:
+ *
+ *   0x7050ef1bc000-0x7050f0785000  libjvm.so     the object itself
+ *   0x7050f0e6a000-0x7050f0e72000  libjimage.so
+ *   0x7050f0f6b000-0x7050f118b000  libstdc++.so
+ *   0x7050f1190000-0x7050f1191000  libjvm.so     the stray page
+ *
+ * Describing libjvm as reaching to the stray page makes it contain three
+ * objects it has nothing to do with, and the agent's binary search over
+ * those bounds then answers with the wrong file -- an address in the C
+ * heap came back as "libjvm.so + 0x1cb8ffc".  The bounds are the run that
+ * starts at the object's own base and stays contiguous.
+ */
+static void set_bounds_to_contiguous_run(lib_info* lib) {
+  map_info* r;
+  uintptr_t start = (uintptr_t)-1;
+  uintptr_t end;
+  int extended;
+
+  for (r = lib->ranges; r != NULL; r = r->next) {
+    if (r->vaddr < start) {
+      start = r->vaddr;
+    }
+  }
+  if (start == (uintptr_t)-1) {
+    return;
+  }
+  end = start;
+  do {
+    extended = 0;
+    for (r = lib->ranges; r != NULL; r = r->next) {
+      if (r->vaddr <= end && r->vaddr + r->memsz > end) {
+        end = r->vaddr + r->memsz;
+        extended = 1;
+      }
+    }
+  } while (extended);
+  lib->end = end;
+}
+
+static int lib_contains(lib_info* lib, uintptr_t addr) {
+  map_info* r;
+
+  for (r = lib->ranges; r != NULL; r = r->next) {
+    if (addr >= r->vaddr && addr < r->vaddr + r->memsz) {
+      return 1;
+    }
+  }
+  return 0;
 }
 
 /* ---------------------------------------------------------------- ELF */
@@ -416,24 +493,13 @@ static int core_pread(int fd, void* buf, size_t len, off_t off) {
   return 0;
 }
 
-/* Reads from the core, or from the file the address belongs to. */
-static int core_read(struct ps_prochandle* ph, uintptr_t addr, void* buf, size_t len) {
-  map_info* m;
+/* The part of a read that the object on disk can answer, or -1. */
+static int lib_read(struct ps_prochandle* ph, uintptr_t addr, void* buf, size_t len) {
   lib_info* lib;
-
-  for (m = ph->maps; m != NULL; m = m->next) {
-    if (addr < m->vaddr || addr >= m->vaddr + m->memsz) {
-      continue;
-    }
-    if (addr + len > m->vaddr + m->filesz) {
-      break;    /* the core stops short here; try the file */
-    }
-    return core_pread(ph->core_fd, buf, len, m->offset + (off_t)(addr - m->vaddr));
-  }
 
   for (lib = ph->libs; lib != NULL; lib = lib->next) {
     seg_info* sg;
-    if (lib->fd < 0 || addr < lib->base || addr >= lib->end) {
+    if (lib->fd < 0 || !lib_contains(lib, addr)) {
       continue;
     }
     for (sg = lib->segs; sg != NULL; sg = sg->next) {
@@ -444,6 +510,64 @@ static int core_read(struct ps_prochandle* ph, uintptr_t addr, void* buf, size_t
     }
   }
   return -1;
+}
+
+/*
+ * Reads out of the core, out of the object on disk, or as zeroes,
+ * whichever the address calls for -- and a single read can need more than
+ * one of them, because the agent reads a page at a time and a PT_LOAD's
+ * filesz stops at the last byte the kernel had anything to say about.
+ * A page that straddles that end is the ordinary case, not an error.
+ */
+static int core_read(struct ps_prochandle* ph, uintptr_t addr, void* buf, size_t len) {
+  size_t done = 0;
+
+  while (done < len) {
+    uintptr_t a = addr + done;
+    size_t left = len - done;
+    char* dst = (char*)buf + done;
+    map_info* m;
+    size_t in, n;
+
+    for (m = ph->maps; m != NULL; m = m->next) {
+      if (a >= m->vaddr && a < m->vaddr + m->memsz) {
+        break;
+      }
+    }
+    if (m == NULL) {
+      /* Outside every PT_LOAD: only a mapped file can answer. */
+      if (lib_read(ph, a, dst, left) != 0) {
+        return -1;
+      }
+      return 0;
+    }
+
+    in = a - m->vaddr;
+    if (in < m->filesz) {
+      n = m->filesz - in;
+      if (n > left) {
+        n = left;
+      }
+      if (core_pread(ph->core_fd, dst, n, m->offset + (off_t)in) != 0) {
+        return -1;
+      }
+    } else {
+      /*
+       * Past what the core holds.  Either the page was file-backed and
+       * unmodified, so the file still has it, or it was anonymous and
+       * empty, so zeroes are what was there.
+       */
+      n = m->memsz - in;
+      if (n > left) {
+        n = left;
+      }
+      if (lib_read(ph, a, dst, n) != 0) {
+        memset(dst, 0, n);
+      }
+    }
+    done += n;
+  }
+  return 0;
 }
 
 static void add_map(struct ps_prochandle* ph, const Elf64_Phdr* ph_ent) {
@@ -567,6 +691,7 @@ static void add_core_lib(struct ps_prochandle* ph, const char* path, uintptr_t l
       sg->next = lib->segs;
       lib->segs = sg;
     }
+    add_range(lib, l_addr + (uintptr_t)p->p_vaddr, (size_t)p->p_memsz);
   }
   munmap(addr, size);
 
@@ -805,10 +930,16 @@ static void free_libs(lib_info* lib) {
   while (lib != NULL) {
     lib_info* next = lib->next;
     seg_info* sg = lib->segs;
+    map_info* r = lib->ranges;
     while (sg != NULL) {
       seg_info* sgnext = sg->next;
       free(sg);
       sg = sgnext;
+    }
+    while (r != NULL) {
+      map_info* rnext = r->next;
+      free(r);
+      r = rnext;
     }
     if (lib->fd >= 0) {
       close(lib->fd);
@@ -865,6 +996,7 @@ static void add_mapping(struct ps_prochandle* ph, const char* path,
       if (end > lib->end) {
         lib->end = end;
       }
+      add_range(lib, start, (size_t)(end - start));
       return;
     }
   }
@@ -880,6 +1012,7 @@ static void add_mapping(struct ps_prochandle* ph, const char* path,
   lib->base = start - offset;
   lib->end = end;
   lib->fd = -1;      /* a live target is read through ptrace, not the file */
+  add_range(lib, start, (size_t)(end - start));
   lib->next = ph->libs;
   ph->libs = lib;
 }
@@ -909,6 +1042,7 @@ static void publish_load_objects(JNIEnv* env, jobject this_obj,
 static void fill_load_objects(JNIEnv* env, jobject this_obj,
                               struct ps_prochandle* ph) {
   struct kinfo_vmentry* vmmap;
+  lib_info* lib;
 #ifdef __FreeBSD__
   int nent = 0;
 #else
@@ -929,6 +1063,9 @@ static void fill_load_objects(JNIEnv* env, jobject this_obj,
   }
   free(vmmap);
 
+  for (lib = ph->libs; lib != NULL; lib = lib->next) {
+    set_bounds_to_contiguous_run(lib);
+  }
   ph->libs = sort_libs_by_base(ph->libs);
   publish_load_objects(env, this_obj, ph);
 }
@@ -1166,7 +1303,7 @@ JNIEXPORT jobject JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_loo
     struct find_addr f;
     uintptr_t bias;
 
-    if (target < lib->base || target >= lib->end) {
+    if (!lib_contains(lib, target)) {
       continue;
     }
     if (map_file(lib->name, &addr, &size) != 0) {
