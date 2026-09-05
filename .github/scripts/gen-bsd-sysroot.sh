@@ -77,6 +77,12 @@ case "$os" in
       fetch "$set.tgz" "$base/$set.tgz"
       extract "$set.tgz"
     done
+    # Alone among these systems, OpenBSD has no iconv in its C library, and
+    # java.instrument and libjdwp include <iconv.h> outright.  It comes from
+    # a package, which unpacks under usr/local.
+    fetch libiconv.tgz \
+        https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/amd64/libiconv-1.19.tgz
+    extract libiconv.tgz
     ;;
 
   dragonfly)
