@@ -200,11 +200,6 @@ static struct ps_prochandle* get_proc(JNIEnv* env, jobject this_obj) {
       (*env)->GetLongField(env, this_obj, p_ps_prochandle_ID);
 }
 
-static pid_t get_pid(JNIEnv* env, jobject this_obj) {
-  struct ps_prochandle* ph = get_proc(env, this_obj);
-  return ph == NULL ? 0 : ph->pid;
-}
-
 static const char* base_name(const char* path) {
   const char* slash = strrchr(path, '/');
   return slash == NULL ? path : slash + 1;
