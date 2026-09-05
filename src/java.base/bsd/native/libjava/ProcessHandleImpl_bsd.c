@@ -45,6 +45,10 @@
 #include <sys/param.h> // For MAXPATHLEN
 #include <sys/user.h>  // For kinfo_proc
 #endif
+#ifdef __DragonFly__
+#include <sys/param.h> // For MAXPATHLEN
+#include <sys/kinfo.h> // For kinfo_proc
+#endif
 
 /* TODO: Refactor. */
 #define RESTARTABLE(_cmd, _result) do { \
@@ -63,11 +67,21 @@
 #define KI_START_USEC  p_ustart_usec
 #elif defined(__FreeBSD__)
 #define KINFO_PROC_T   kinfo_proc
+#define KERN_PROC_LIST KERN_PROC_PROC
 #define KI_PID         ki_pid
 #define KI_PPID        ki_ppid
 #define KI_UID         ki_uid
 #define KI_START_SEC   ki_start.tv_sec
 #define KI_START_USEC  ki_start.tv_usec
+#elif defined(__DragonFly__)
+// The same shape as FreeBSD's, with a kp_ prefix and no KERN_PROC_PROC.
+#define KINFO_PROC_T   kinfo_proc
+#define KERN_PROC_LIST KERN_PROC_ALL
+#define KI_PID         kp_pid
+#define KI_PPID        kp_ppid
+#define KI_UID         kp_uid
+#define KI_START_SEC   kp_start.tv_sec
+#define KI_START_USEC  kp_start.tv_usec
 #elif defined(__NetBSD__)
 #define KERN_PROC_MIB  KERN_PROC2
 #define KINFO_PROC_T   kinfo_proc2
@@ -137,12 +151,12 @@ jint os_getChildren(JNIEnv *env, jlong jpid, jlongArray jarray,
     }
 
     // Get buffer size needed to read all processes
-#ifndef __FreeBSD__
+#if !defined(__FreeBSD__) && !defined(__DragonFly__)
     u_int namelen = 6;
     int mib[6] = {CTL_KERN, KERN_PROC_MIB, KERN_PROC_ALL, 0, sizeof(struct KINFO_PROC_T), 0};
 #else
     u_int namelen = 3;
-    int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_PROC};
+    int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_LIST};
 #endif
     if (sysctl(mib, namelen, NULL, &bufSize, NULL, 0) < 0) {
         JNU_ThrowByNameWithLastError(env,
@@ -242,7 +256,7 @@ pid_t os_getParentPidAndTimings(JNIEnv *env, pid_t jpid,
     size_t bufSize = sizeof kp;
 
     // Read the process info for the specific pid
-#ifndef __FreeBSD__
+#if !defined(__FreeBSD__) && !defined(__DragonFly__)
     u_int namelen = 6;
     int mib[6] = {CTL_KERN, KERN_PROC_MIB, KERN_PROC_PID, pid, bufSize, 1};
 #else
@@ -304,7 +318,7 @@ static uid_t getUID(pid_t pid) {
     size_t bufSize = sizeof kp;
 
     // Read the process info for the specific pid
-#ifndef __FreeBSD__
+#if !defined(__FreeBSD__) && !defined(__DragonFly__)
     u_int namelen = 6;
     int mib[6] = {CTL_KERN, KERN_PROC_MIB, KERN_PROC_PID, pid, bufSize, 1};
 #else

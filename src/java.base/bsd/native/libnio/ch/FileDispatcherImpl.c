@@ -80,7 +80,7 @@ Java_sun_nio_ch_FileDispatcherImpl_transferTo0(JNIEnv *env, jobject this,
     off_t numBytes;
     int result;
 
-#if defined(__FreeBSD__)
+#if defined(__FreeBSD__) || defined(__DragonFly__)
     /*
      * FreeBSD takes the count in by value and hands the tally back through
      * a separate argument, with a flags word after it:

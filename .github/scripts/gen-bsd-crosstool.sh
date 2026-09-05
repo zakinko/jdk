@@ -79,12 +79,21 @@ case "$os" in
     rt_extra="--rtlib=libgcc"
     link_extra="-lgcc"
     ;;
+  openbsd)
+    # iconv is a package there rather than part of the C library, and a
+    # package unpacks under usr/local, which clang does not search.
+    cxx_extra=""
+    rt_extra=""
+    link_extra=""
+    common_extra="-isystem $sysroot/usr/local/include -L$sysroot/usr/local/lib"
+    ;;
   *)
     cxx_extra=""
     rt_extra=""
     link_extra=""
     ;;
 esac
+: "${common_extra:=}"
 
 for tool in clang clang++; do
   case "$tool" in
@@ -98,7 +107,7 @@ for tool in clang clang++; do
 # with warnings as errors.
 exec /usr/bin/$tool --target=$triple --sysroot=$sysroot \\
   -Wno-unused-command-line-argument \\
-  $rt_extra -fuse-ld=lld $extra \\
+  $rt_extra -fuse-ld=lld $common_extra $extra \\
   -include $fixups "\$@" $link_extra
 W
   chmod +x "$bindir/$triple-$tool"
