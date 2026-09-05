@@ -1938,6 +1938,29 @@ bool os::pd_uncommit_memory(char* addr, size_t size, bool exec) {
 }
 
 bool os::pd_create_stack_guard_pages(char* addr, size_t size) {
+#ifdef __FreeBSD__
+  // FreeBSD maps thread stacks with MAP_STACK, so only the part that has
+  // been touched is really mapped and the rest is a guard entry that
+  // vm_map_growstack() converts to stack when it is faulted on.  It will
+  // not grow to within security.bsd.stack_guard_page pages of whatever is
+  // mapped below, and the guard pages this function is about to commit are
+  // mapped below.  The pages immediately above them then become
+  // unreachable: touching one raises SIGSEGV with SEGV_ACCERR at an address
+  // the VM believes is usable stack, so it is not recognised as a stack
+  // overflow and every StackOverflowError becomes a crash instead.
+  //
+  // Map what has not been touched yet, up to the current frame.  There is
+  // then no guard entry left for growstack to refuse, and the only pages
+  // that fault are the ones this function guards.  Nothing below the stack
+  // pointer is live, and a failure here is not fatal -- it costs the pages
+  // above the guard, which is what would have happened anyway.
+  char* const untouched = addr + size;
+  char* const sp = align_down((char*)os::current_stack_pointer() - os::vm_page_size(),
+                              os::vm_page_size());
+  if (sp > untouched) {
+    os::commit_memory(untouched, sp - untouched, !ExecMem);
+  }
+#endif
   return os::commit_memory(addr, size, !ExecMem);
 }
 
