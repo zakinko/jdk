@@ -89,7 +89,9 @@ case "$os" in
     bunzip2 dfly.iso.bz2
     # No usr/libdata/ldscripts: the ISO does not carry it, and lld does not
     # read linker scripts from the sysroot anyway.
-    bsdtar -xf dfly.iso -C "$sysroot" usr/include usr/lib lib
+    # usr/libdata carries bits/c++config.h, which sits apart from the rest
+    # of the libstdc++ headers on DragonFly.
+    bsdtar -xf dfly.iso -C "$sysroot" usr/include usr/lib usr/libdata lib
     rm -f dfly.iso
     ;;
 
@@ -117,7 +119,7 @@ done
 
 # Drop what the build never reads, so that the cache entry stays small.
 rm -rf "$sysroot"/{dev,proc,var,tmp,root,home} 2>/dev/null || true
-rm -rf "$sysroot"/usr/{sbin,share,libdata,libexec} 2>/dev/null || true
+rm -rf "$sysroot"/usr/{sbin,share,libexec} 2>/dev/null || true
 rm -rf "$sysroot"/{sbin,bin,rescue} 2>/dev/null || true
 
 ls -d "$sysroot/usr/include" "$sysroot/usr/lib"

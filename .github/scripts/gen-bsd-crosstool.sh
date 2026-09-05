@@ -55,12 +55,27 @@ cat > "$fixups" <<'H'
 #endif
 H
 
-# NetBSD and DragonFly ship libstdc++ and keep its headers under
-# /usr/include/g++, which clang does not look in even when told to target
-# them.  FreeBSD and OpenBSD ship libc++, which clang finds by itself.
+# NetBSD and DragonFly ship libstdc++, and neither puts its headers where
+# clang looks by default.  NetBSD keeps them together under /usr/include/g++;
+# DragonFly splits them, with the headers proper under /usr/include/c++/<ver>
+# and the target-specific bits/c++config.h off in /usr/libdata/gcc<ver>.
+# Getting that wrong is not an error -- clang falls back to the host's headers
+# and compiles Ubuntu's declarations against DragonFly's system headers, which
+# comes apart much later as exception specifications that do not match.
+# FreeBSD and OpenBSD ship libc++, which clang finds by itself.
 case "$os" in
-  netbsd|dragonfly)
+  netbsd)
     cxx_extra="-stdlib=libstdc++ -isystem $sysroot/usr/include/g++"
+    rt_extra="--rtlib=libgcc"
+    link_extra="-lgcc"
+    ;;
+  dragonfly)
+    cxxdir=$(ls -d "$sysroot"/usr/include/c++/*/ | sort -V | tail -1)
+    cxxdir=${cxxdir%/}
+    gccdir=$(ls -d "$sysroot"/usr/libdata/gcc*/ | sort -V | tail -1)
+    gccdir=${gccdir%/}
+    cxx_extra="-stdlib=libstdc++ -nostdinc++ -isystem $cxxdir \
+        -isystem $cxxdir/backward -isystem $gccdir"
     rt_extra="--rtlib=libgcc"
     link_extra="-lgcc"
     ;;
