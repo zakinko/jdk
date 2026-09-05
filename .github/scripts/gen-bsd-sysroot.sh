@@ -103,20 +103,6 @@ esac
 
 sudo chown -R "$USER" "$sysroot"
 
-# Every one of these systems keeps its linker symlinks absolute --
-# /usr/lib/libc.so points at /lib/libc.so.N -- and a symlink is resolved by
-# the kernel, which knows nothing about --sysroot.  Left alone they reach out
-# of the sysroot and into the host, and the link either fails or, worse,
-# succeeds against the wrong libc.  Make them relative.
-find "$sysroot" -type l | while read -r link; do
-  target=$(readlink "$link")
-  case "$target" in
-    /*) ;;
-    *) continue ;;
-  esac
-  up=$(dirname "${link#$sysroot/}" | awk -F/ '{ for (i = 1; i <= NF; i++) printf "../" }')
-  ln -sf "${up}${target#/}" "$link"
-done
 
 # No BSD carries X11 in its base system either -- NetBSD and OpenBSD ship it
 # as separate sets, the others leave it to ports -- so the build is configured
@@ -136,5 +122,44 @@ done
 rm -rf "$sysroot"/{dev,proc,var,tmp,root,home} 2>/dev/null || true
 rm -rf "$sysroot"/usr/{sbin,share,libexec} 2>/dev/null || true
 rm -rf "$sysroot"/{sbin,bin,rescue} 2>/dev/null || true
+
+# Every one of these systems keeps its linker symlinks absolute --
+# /usr/lib/libc.so points at /lib/libc.so.N -- and a symlink is resolved by
+# the kernel, which knows nothing about --sysroot.  Left alone they reach out
+# of the sysroot and into the host, and the link either fails or, worse,
+# succeeds against the wrong libc.  Make them relative.
+#
+# After the pruning above, not before: a distribution set carries directories
+# the build never looks at and whose modes stop even the owner walking them
+# (var/spool/ftp/hidden, dev), and those are gone by now.
+sudo chmod -R u+rwX "$sysroot"
+find "$sysroot" -type l | while read -r link; do
+  target=$(readlink "$link")
+  case "$target" in
+    /*) ;;
+    *) continue ;;
+  esac
+  up=$(dirname "${link#$sysroot/}" | awk -F/ '{ for (i = 1; i <= NF; i++) printf "../" }')
+  ln -sf "${up}${target#/}" "$link"
+done
+
+# OpenBSD ships no unversioned libfoo.so.  Its own linker scans the directory
+# and takes the highest libfoo.so.N.M it finds; lld does not, so -lc++abi
+# falls through to libc++abi.a and the link of a shared object dies on
+#
+#   ld.lld: error: relocation R_X86_64_PC32 cannot be used against symbol
+#     '__cxa_new_handler'; recompile with -fPIC
+#
+# because the archive is not built PIC.  Make the symlinks lld expects.
+for dir in "$sysroot"/usr/lib "$sysroot"/lib; do
+  [ -d "$dir" ] || continue
+  for so in "$dir"/lib*.so.*; do
+    [ -e "$so" ] || continue
+    stem=${so%%.so.*}
+    [ -e "$stem.so" ] && continue
+    newest=$(ls -1 "$stem".so.* 2>/dev/null | sort -V | tail -1)
+    ln -sf "$(basename "$newest")" "$stem.so"
+  done
+done
 
 ls -d "$sysroot/usr/include" "$sysroot/usr/lib"
