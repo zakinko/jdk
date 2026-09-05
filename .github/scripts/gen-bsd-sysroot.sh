@@ -103,6 +103,21 @@ esac
 
 sudo chown -R "$USER" "$sysroot"
 
+# Every one of these systems keeps its linker symlinks absolute --
+# /usr/lib/libc.so points at /lib/libc.so.N -- and a symlink is resolved by
+# the kernel, which knows nothing about --sysroot.  Left alone they reach out
+# of the sysroot and into the host, and the link either fails or, worse,
+# succeeds against the wrong libc.  Make them relative.
+find "$sysroot" -type l | while read -r link; do
+  target=$(readlink "$link")
+  case "$target" in
+    /*) ;;
+    *) continue ;;
+  esac
+  up=$(dirname "${link#$sysroot/}" | awk -F/ '{ for (i = 1; i <= NF; i++) printf "../" }')
+  ln -sf "${up}${target#/}" "$link"
+done
+
 # No BSD carries X11 in its base system either -- NetBSD and OpenBSD ship it
 # as separate sets, the others leave it to ports -- so the build is configured
 # headless and none of it is fetched.  What that gives up is the X11 half of
