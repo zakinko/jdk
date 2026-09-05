@@ -325,7 +325,7 @@ static uid_t getUID(pid_t pid) {
  * into the Info object.
  */
 void os_getCmdlineAndUserInfo(JNIEnv *env, jobject jinfo, pid_t pid) {
-    int mib[4], nargs, i;
+    int mib[4], nargs;
     size_t size;
     char *args;
 
@@ -393,6 +393,7 @@ void os_getCmdlineAndUserInfo(JNIEnv *env, jobject jinfo, pid_t pid) {
         if ((argsArray = (*env)->NewObjectArray(env, nargs, clazzString, NULL)) == NULL)
             break;
 
+        int i;
         for (i = 0; i < nargs; i++) {
             jstring str;
             if ((str = JNU_NewStringPlatform(env, argv[i])) == NULL)
