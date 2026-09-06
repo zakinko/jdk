@@ -80,9 +80,13 @@ case "$os" in
     # Alone among these systems, OpenBSD has no iconv in its C library, and
     # java.instrument and libjdwp include <iconv.h> outright.  It comes from
     # a package, which unpacks under usr/local.
+    # A package's paths are relative to /usr/local, so it needs its own
+    # destination rather than the sysroot root.
     fetch libiconv.tgz \
         https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/amd64/libiconv-1.19.tgz
-    extract libiconv.tgz
+    sudo mkdir -p "$sysroot/usr/local"
+    echo "extracting libiconv.tgz into usr/local"
+    sudo tar xf libiconv.tgz -C "$sysroot/usr/local"
     ;;
 
   dragonfly)

@@ -171,7 +171,7 @@ jint os_getChildren(JNIEnv *env, jlong jpid, jlongArray jarray,
         return -1;
     }
 
-#ifndef __FreeBSD__
+#if !defined(__FreeBSD__) && !defined(__DragonFly__)
     mib[5] = bufSize / sizeof(struct KINFO_PROC_T);
 #endif
 
