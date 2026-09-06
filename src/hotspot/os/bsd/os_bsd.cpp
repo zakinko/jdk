@@ -2692,16 +2692,20 @@ int os::open(const char *path, int oflag, int mode) {
 // The BSDs have no mach thread_info(); pthread_getcpuclockid(3) gives a
 // per-thread CPU clock instead.  It does not separate user from system time,
 // so both callers get the total.
-static jlong bsd_thread_cpu_time(pthread_t tid) {
-  clockid_t clockid;
+static jlong bsd_cpu_time(clockid_t clockid) {
   struct timespec tp;
-  if (pthread_getcpuclockid(tid, &clockid) != 0) {
-    return -1;
-  }
   if (clock_gettime(clockid, &tp) != 0) {
     return -1;
   }
   return jlong(tp.tv_sec) * NANOSECS_PER_SEC + jlong(tp.tv_nsec);
+}
+
+static jlong bsd_thread_cpu_time(pthread_t tid) {
+  clockid_t clockid;
+  if (pthread_getcpuclockid(tid, &clockid) != 0) {
+    return -1;
+  }
+  return bsd_cpu_time(clockid);
 }
 #endif
 
@@ -2716,6 +2720,16 @@ jlong os::current_thread_cpu_time() {
 jlong os::thread_cpu_time(Thread* thread) {
 #ifdef __APPLE__
   return os::thread_cpu_time(thread, true /* user + sys */);
+#elif defined(__OpenBSD__)
+  // OpenBSD's pthread_getcpuclockid(3) reads through the pthread_t instead of
+  // validating it, so asking about a thread that has already terminated
+  // faults rather than answering ESRCH as the manual says.  Measured on 7.9:
+  // a call on a joined thread is a SIGSEGV in pthread_getcpuclockid+0x17, and
+  // the VM took it whenever JMX asked the CPU time of a natively attached
+  // thread that had gone away without detaching.  The clock id recorded while
+  // the thread was alive stays usable; clock_gettime on it then answers ESRCH,
+  // which is the -1 the caller is looking for.
+  return bsd_cpu_time(thread->osthread()->cpu_clockid());
 #else
   return bsd_thread_cpu_time(thread->osthread()->pthread_id());
 #endif
@@ -2730,7 +2744,9 @@ jlong os::current_thread_cpu_time(bool user_sys_cpu_time) {
 }
 
 jlong os::thread_cpu_time(Thread *thread, bool user_sys_cpu_time) {
-#ifdef __APPLE__
+#if defined(__OpenBSD__)
+  return os::thread_cpu_time(thread);
+#elif defined(__APPLE__)
   struct thread_basic_info tinfo;
   mach_msg_type_number_t tcount = THREAD_INFO_MAX;
   kern_return_t kr;

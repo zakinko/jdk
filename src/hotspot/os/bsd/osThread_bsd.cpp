@@ -32,6 +32,9 @@
 OSThread::OSThread()
   : _thread_id(0),
     _pthread_id(nullptr),
+#ifdef __OpenBSD__
+    _cpu_clockid((clockid_t)-1),
+#endif
     _unique_thread_id(0),
     _caller_sigmask(),
     sr(),
