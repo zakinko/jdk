@@ -42,10 +42,15 @@
 #endif
 #include <sys/time.h>
 
-// macOS and NetBSD carry a Linux-shaped <sys/xattr.h>.  FreeBSD keeps
-// extended attributes behind extattr_get_file(2) and its namespaces in
-// <sys/extattr.h>, and OpenBSD and DragonFly have none, so naming
-// _ALLBSD_SOURCE here claims a header three of the five do not ship.
+// macOS and NetBSD carry a Linux-shaped <sys/xattr.h>.  FreeBSD and
+// DragonFly keep extended attributes behind extattr_get_file(2) and its
+// namespaces in <sys/extattr.h> instead -- a different interface, not this
+// one -- and OpenBSD has neither.  So naming _ALLBSD_SOURCE here claims a
+// header three of the five do not ship.
+//
+// Measured on DragonFly 6.4: <sys/extattr.h> is there and libc exports the
+// functions, and on a UFS root they answer EOPNOTSUPP.  Absent support is
+// not the same as an absent interface, and either way it is not this one.
 #if defined(__linux__) || defined(__APPLE__) || defined(__NetBSD__)
 #include <sys/xattr.h>
 #endif
