@@ -1538,6 +1538,43 @@ void os::print_dll_info(outputStream *st) {
   }
 }
 
+#ifdef __OpenBSD__
+struct loaded_modules_info_param {
+  os::LoadedModulesCallbackFunc callback;
+  void *param;
+};
+
+// The object's extent is the span of its PT_LOAD segments, as os_linux.cpp
+// takes it; dl_phdr_info carries nothing closer to a size.
+static int dl_iterate_callback(struct dl_phdr_info *info, size_t size, void *data) {
+  if ((info->dlpi_name == nullptr) || (*info->dlpi_name == '\0')) {
+    return 0;
+  }
+
+  struct loaded_modules_info_param *callback_param = reinterpret_cast<struct loaded_modules_info_param *>(data);
+  address base = nullptr;
+  address top = nullptr;
+  for (int idx = 0; idx < info->dlpi_phnum; idx++) {
+    const Elf_Phdr *phdr = info->dlpi_phdr + idx;
+    if (phdr->p_type == PT_LOAD) {
+      address raw_phdr_base = reinterpret_cast<address>(info->dlpi_addr + phdr->p_vaddr);
+
+      address phdr_base = align_down(raw_phdr_base, phdr->p_align);
+      if ((base == nullptr) || (base > phdr_base)) {
+        base = phdr_base;
+      }
+
+      address phdr_top = align_up(raw_phdr_base + phdr->p_memsz, phdr->p_align);
+      if ((top == nullptr) || (top < phdr_top)) {
+        top = phdr_top;
+      }
+    }
+  }
+
+  return callback_param->callback(info->dlpi_name, base, top, callback_param->param);
+}
+#endif
+
 int os::get_loaded_modules_info(os::LoadedModulesCallbackFunc callback, void *param) {
 #ifdef RTLD_DI_LINKMAP
   Dl_info dli;
@@ -1573,6 +1610,11 @@ int os::get_loaded_modules_info(os::LoadedModulesCallbackFunc callback, void *pa
 
   dlclose(handle);
   return 0;
+#elif defined(__OpenBSD__)
+  // OpenBSD's dlinfo(3) has no RTLD_DI_LINKMAP; dl_iterate_phdr(3) is the
+  // way to walk the loaded objects there.
+  struct loaded_modules_info_param callback_param = {callback, param};
+  return dl_iterate_phdr(&dl_iterate_callback, &callback_param);
 #elif defined(__APPLE__)
   for (uint32_t i = 1; i < _dyld_image_count(); i++) {
     // Value for top_address is returned as 0 since we don't have any information about module size
