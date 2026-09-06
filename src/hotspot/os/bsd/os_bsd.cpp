@@ -1808,9 +1808,14 @@ bool os::pd_commit_memory(char* addr, size_t size, bool exec) {
 #if defined(__OpenBSD__)
   // XXX: Work-around mmap/MAP_FIXED bug temporarily on OpenBSD
   Events::log_memprotect(nullptr, "Protecting memory [" INTPTR_FORMAT "," INTPTR_FORMAT "] with protection modes %x", p2i(addr), p2i(addr+size), prot);
-  if (::mprotect(addr, size, prot) == 0) {
+  // mprotect(2) rounds an unaligned addr down to its page where mmap(2)
+  // with MAP_FIXED rejects it, so refuse here what the mmap path would.
+  if (!is_aligned(addr, os::vm_page_size())) {
+    errno = EINVAL;
+  } else if (::mprotect(addr, size, prot) == 0) {
     return true;
-  } else {
+  }
+  {
     ErrnoPreserver ep;
     log_trace(os, map)("mprotect failed: " RANGEFMT " errno=(%s)",
                        RANGEFMTARGS(addr, size),
@@ -1930,9 +1935,13 @@ bool os::pd_uncommit_memory(char* addr, size_t size, bool exec) {
 #if defined(__OpenBSD__)
   // XXX: Work-around mmap/MAP_FIXED bug temporarily on OpenBSD
   Events::log_memprotect(nullptr, "Protecting memory [" INTPTR_FORMAT "," INTPTR_FORMAT "] with PROT_NONE", p2i(addr), p2i(addr+size));
-  if (::mprotect(addr, size, PROT_NONE) == 0) {
+  // See pd_commit_memory: keep an unaligned addr failing as it does with mmap.
+  if (!is_aligned(addr, os::vm_page_size())) {
+    errno = EINVAL;
+  } else if (::mprotect(addr, size, PROT_NONE) == 0) {
     return true;
-  } else {
+  }
+  {
     ErrnoPreserver ep;
     log_trace(os, map)("mprotect failed: " RANGEFMT " errno=(%s)",
                        RANGEFMTARGS(addr, size),
