@@ -48,9 +48,13 @@
 // one -- and OpenBSD has neither.  So naming _ALLBSD_SOURCE here claims a
 // header three of the five do not ship.
 //
-// Measured on DragonFly 6.4: <sys/extattr.h> is there and libc exports the
-// functions, and on a UFS root they answer EOPNOTSUPP.  Absent support is
-// not the same as an absent interface, and either way it is not this one.
+// Measured on DragonFly 6.4, for whoever reaches for extattr next: the
+// header declares thirteen functions and libc defines three of them --
+// extattr_{get,set,delete}_file.  The _fd, _link and _list_* generations
+// are declared and absent, so a shared object naming one of those compiles,
+// links, and fails at dlopen.  On a UFS root the three that exist answer
+// EOPNOTSUPP, which is a filesystem without support rather than a system
+// without the interface.  FreeBSD's libc has all thirteen.
 #if defined(__linux__) || defined(__APPLE__) || defined(__NetBSD__)
 #include <sys/xattr.h>
 #endif
