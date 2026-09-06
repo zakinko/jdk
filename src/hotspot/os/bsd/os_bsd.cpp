@@ -2021,6 +2021,26 @@ bool os::pd_release_memory(char* addr, size_t size) {
   return anon_munmap(addr, size);
 }
 
+#ifdef __OpenBSD__
+// OpenBSD keeps the primordial thread's stack under a guard of its own and
+// lets nobody change the protection of any of it: mprotect answers EPERM at
+// every depth, where a pthread's stack takes it -- measured on 7.9 with
+// pthread_main_np() telling the two apart.  The launcher never runs Java on
+// that thread, but an executable that creates the VM from main() does, and
+// the zones it then asks for are exactly what the kernel will not give.
+// Leave the guarding to the kernel there and report success, so that the
+// VM starts; the stack still ends in a fault, only not at the address the
+// VM chose.
+static bool openbsd_kernel_guards_this_stack(char* addr, size_t size, int err) {
+  if (err != EPERM || pthread_main_np() != 1) {
+    return false;
+  }
+  address base = os::current_stack_base();
+  address low  = base - os::current_stack_size();
+  return (address)addr >= low && (address)addr + size <= base;
+}
+#endif
+
 static bool bsd_mprotect(char* addr, size_t size, int prot) {
   // Bsd wants the mprotect address argument to be page aligned.
   char* bottom = (char*)align_down((intptr_t)addr, os::vm_page_size());
@@ -2034,7 +2054,17 @@ static bool bsd_mprotect(char* addr, size_t size, int prot) {
 
   size = align_up(pointer_delta(addr, bottom, 1) + size, os::vm_page_size());
   Events::log_memprotect(nullptr, "Protecting memory [" INTPTR_FORMAT "," INTPTR_FORMAT "] with protection modes %x", p2i(bottom), p2i(bottom+size), prot);
-  return ::mprotect(bottom, size, prot) == 0;
+  if (::mprotect(bottom, size, prot) == 0) {
+    return true;
+  }
+#ifdef __OpenBSD__
+  if (openbsd_kernel_guards_this_stack(bottom, size, errno)) {
+    log_debug(os, map)("mprotect refused on the primordial stack " RANGEFMT
+                       "; leaving it to the kernel", RANGEFMTARGS(bottom, size));
+    return true;
+  }
+#endif
+  return false;
 }
 
 // Set protections specified
