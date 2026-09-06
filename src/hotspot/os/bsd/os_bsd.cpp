@@ -1958,11 +1958,18 @@ bool os::pd_create_stack_guard_pages(char* addr, size_t size) {
   // that fault are the ones this function guards.  Nothing below the stack
   // pointer is live, and a failure here is not fatal -- it costs the pages
   // above the guard, which is what would have happened anyway.
+  // pd_commit_memory rather than commit_memory: this is not a new
+  // commitment, only the mapping the thread stack was already reserved for,
+  // and os::commit_memory would record it with NMT.  NMT finds the boundary
+  // between a stack's guard pages and its usable part by looking for the
+  // committed region it recorded, so a record covering the whole stack makes
+  // it report the stack as fully committed whatever is resident -- which is
+  // what runtime/Thread/TestAlwaysPreTouchStacks measures.
   char* const untouched = addr + size;
   char* const sp = align_down((char*)os::current_stack_pointer() - os::vm_page_size(),
                               os::vm_page_size());
   if (sp > untouched) {
-    os::commit_memory(untouched, sp - untouched, !ExecMem);
+    os::pd_commit_memory(untouched, sp - untouched, !ExecMem);
   }
 #endif
   return os::commit_memory(addr, size, !ExecMem);
