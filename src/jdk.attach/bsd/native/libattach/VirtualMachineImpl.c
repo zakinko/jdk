@@ -37,6 +37,10 @@
 // FreeBSD keeps struct kinfo_proc here rather than in <sys/sysctl.h>.
 #include <sys/user.h>
 #endif
+#ifdef __DragonFly__
+// DragonFly keeps it somewhere else again.
+#include <sys/kinfo.h>
+#endif
 #include <sys/types.h>
 #include <sys/un.h>
 #include <errno.h>
