@@ -68,6 +68,13 @@ jobs:
             pkg install -y openjdk26 bash gmake autoconf zip unzip cups \
               fontconfig freetype2 libX11 libXext libXrender libXrandr \
               libXtst libXt libXi giflib png jpeg-turbo harfbuzz wget
+            # VM の hostname はどの resolver からも引けない。
+            # InetAddress.getLocalHost() が UnknownHostException を投げ、
+            # Selector の test が 13 件それで落ちていた。移植とは関係ない。
+            echo "127.0.0.1 $(hostname) $(hostname -s)" >> /etc/hosts
+            # test は root では回せない。root は permission bit を無視するので
+            # CopyAndMove の AccessDeniedException が飛ばない。
+            pw useradd -n tester -m -s /bin/sh || true
           envs: 'TESTS'
           run: |
             set -e
@@ -159,8 +166,13 @@ jobs:
             # なった。make test は落ちれば非零を返すので、それが唯一の正。
             # set -e が効いているので、落ちた瞬間に抜けると下の報告部が
             # 出ない。rc を受け取ってから続ける。
+            # build までは root、test だけ tester に渡す。jtreg は build tree
+            # の下に書くので、先に持ち主を移す。
+            chmod 1777 /tmp
+            chown -R tester . || true
             rc=0
-            gmake test TEST="$T" > /tmp/test.log 2>&1 || rc=$?
+            su -m tester -c "cd $PWD && gmake test TEST=\"$T\"" \
+              > /tmp/test.log 2>&1 || rc=$?
 
             echo "===== test の結果 ====="
             sed -n '/^==============================$/,$p' /tmp/test.log | head -40
