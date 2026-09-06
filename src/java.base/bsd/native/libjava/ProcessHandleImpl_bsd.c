@@ -362,9 +362,10 @@ void os_getCmdlineAndUserInfo(JNIEnv *env, jobject jinfo, pid_t pid) {
     mib[2] = pid;
     mib[3] = KERN_PROC_ARGV;
 
+    // The process may have exited between the caller's last look and this
+    // one, and then there is nothing to report, not an error to raise; see
+    // the NetBSD note below.  The same goes for the second lookup.
     if (sysctl(mib, 4, NULL, &size, NULL, 0) == -1) {
-        JNU_ThrowByNameWithLastError(env,
-            "java/lang/RuntimeException", "sysctl failed");
         return;
     }
 
@@ -382,10 +383,6 @@ void os_getCmdlineAndUserInfo(JNIEnv *env, jobject jinfo, pid_t pid) {
         jobject argsArray;
 
         if (sysctl(mib, 4, args, &size, NULL, 0) == -1) {
-            if (errno != EINVAL) {
-                JNU_ThrowByNameWithLastError(env,
-                    "java/lang/RuntimeException", "sysctl failed");
-            }
             break;
         }
 
@@ -398,13 +395,20 @@ void os_getCmdlineAndUserInfo(JNIEnv *env, jobject jinfo, pid_t pid) {
         if (nargs < 1)
             break;
 
-        // reset argv and store command executable path
+        // OpenBSD has no KERN_PROC_PATHNAME, so argv[0] is all there is to
+        // name the executable, and it is whatever the parent passed: a
+        // pathname only when it is absolute.  Info.command() is documented
+        // as the executable's pathname, so a bare name is left unset rather
+        // than reported as one.
         argv = (char **)args;
-        if ((cmdexe = JNU_NewStringPlatform(env, *argv++)) == NULL)
-            break;
-        (*env)->SetObjectField(env, jinfo, ProcessHandleImpl_Info_commandID, cmdexe);
-        if ((*env)->ExceptionCheck(env))
-            break;
+        if (**argv == '/') {
+            if ((cmdexe = JNU_NewStringPlatform(env, *argv)) == NULL)
+                break;
+            (*env)->SetObjectField(env, jinfo, ProcessHandleImpl_Info_commandID, cmdexe);
+            if ((*env)->ExceptionCheck(env))
+                break;
+        }
+        argv++;
         nargs--;
 
         // process remaining arguments
