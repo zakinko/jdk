@@ -40,6 +40,25 @@
   #include <sys/param.h>
   #include <sys/resource.h>
 #endif
+#if defined(__FreeBSD__) || defined(__DragonFly__)
+  // CPUSTATES and the CP_* indices, and kern.cp_time to fill them.
+  #include <sys/resource.h>
+#endif
+#ifdef __OpenBSD__
+  // The same, with a sixth state (CP_SPIN) and KERN_CPTIME to read them.
+  #include <sys/sched.h>
+#endif
+
+// Every BSD other than macOS keeps the machine-wide tick counters in an
+// array of CPUSTATES entries; only the way to ask, the width of an entry
+// and the number of states differ.  Add up everything that is not idle.
+// (Decided here rather than with defined() inside a macro, which clang
+// rejects under -Wexpansion-to-defined.)
+#if defined(__FreeBSD__) || defined(__DragonFly__) || defined(__OpenBSD__)
+  #define BSD_HAS_CP_TIME 1
+#else
+  #define BSD_HAS_CP_TIME 0
+#endif
 #include <sys/time.h>
 #include <sys/sysctl.h>
 #include <sys/socket.h>
@@ -53,7 +72,7 @@ static const double NANOS_PER_SEC = 1000000000.0;
 class CPUPerformanceInterface::CPUPerformance : public CHeapObj<mtInternal> {
    friend class CPUPerformanceInterface;
  private:
-#if defined(__APPLE__) || defined(__NetBSD__)
+#if defined(__APPLE__) || defined(__NetBSD__) || BSD_HAS_CP_TIME
   uint64_t _jvm_real;
   uint64_t _total_csr_nanos;
   uint64_t _jvm_user;
@@ -95,7 +114,7 @@ class CPUPerformanceInterface::CPUPerformance : public CHeapObj<mtInternal> {
 };
 
 CPUPerformanceInterface::CPUPerformance::CPUPerformance() {
-#if defined(__APPLE__) || defined(__NetBSD__)
+#if defined(__APPLE__) || defined(__NetBSD__) || BSD_HAS_CP_TIME
   _jvm_real = 0;
   _total_csr_nanos= 0;
   _jvm_context_switches = 0;
@@ -115,7 +134,7 @@ bool CPUPerformanceInterface::CPUPerformance::initialize() {
 }
 
 CPUPerformanceInterface::CPUPerformance::~CPUPerformance() {
-#if defined(__APPLE__) || defined(__NetBSD__)
+#if defined(__APPLE__) || defined(__NetBSD__) || BSD_HAS_CP_TIME
   FREE_C_HEAP_ARRAY(_cpu_used_ticks);
   FREE_C_HEAP_ARRAY(_cpu_total_ticks);
 #endif
@@ -242,13 +261,56 @@ int CPUPerformanceInterface::CPUPerformance::cpu_load_total_process(double* cpu_
   *cpu_load = (double)used_delta / total_delta;
 
   return OS_OK;
+#elif BSD_HAS_CP_TIME
+  long cp_time[CPUSTATES];
+  size_t len = sizeof(cp_time);
+#ifdef __OpenBSD__
+  int mib[2] = { CTL_KERN, KERN_CPTIME };
+  if (sysctl(mib, 2, cp_time, &len, nullptr, 0) != 0) {
+    return OS_ERR;
+  }
+#else
+  if (sysctlbyname("kern.cp_time", cp_time, &len, nullptr, 0) != 0) {
+    return OS_ERR;
+  }
+#endif
+
+  long used_ticks = 0;
+  for (int i = 0; i < CPUSTATES; i++) {
+    if (i != CP_IDLE) {
+      used_ticks += cp_time[i];
+    }
+  }
+  long total_ticks = used_ticks + cp_time[CP_IDLE];
+
+  if (_used_ticks == 0 || _total_ticks == 0) {
+    // First call, just set the values
+    _used_ticks  = used_ticks;
+    _total_ticks = total_ticks;
+    return OS_ERR;
+  }
+
+  long used_delta  = used_ticks - _used_ticks;
+  long total_delta = total_ticks - _total_ticks;
+
+  _used_ticks  = used_ticks;
+  _total_ticks = total_ticks;
+
+  if (total_delta == 0) {
+    // Avoid division by zero
+    return OS_ERR;
+  }
+
+  *cpu_load = (double)used_delta / total_delta;
+
+  return OS_OK;
 #else
   return FUNCTIONALITY_NOT_IMPLEMENTED;
 #endif
 }
 
 int CPUPerformanceInterface::CPUPerformance::cpu_loads_process(double* pjvmUserLoad, double* pjvmKernelLoad, double* psystemTotalLoad) {
-#if defined(__APPLE__) || defined(__NetBSD__)
+#if defined(__APPLE__) || defined(__NetBSD__) || BSD_HAS_CP_TIME
   // times(2) is POSIX; only the system-wide part below needed a platform of
   // its own.
   int result = cpu_load_total_process(psystemTotalLoad);
