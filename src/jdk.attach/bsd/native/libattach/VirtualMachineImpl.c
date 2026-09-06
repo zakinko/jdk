@@ -182,6 +182,10 @@ JNIEXPORT jboolean JNICALL Java_sun_tools_attach_VirtualMachineImpl_checkCatches
         // 32-bit words as well; SIGQUIT is in the first.
         const bool ignored = (kiproc.ki_sigignore.__bits[0] & sigmask(SIGQUIT)) != 0;
         const bool caught  = (kiproc.ki_sigcatch.__bits[0] & sigmask(SIGQUIT))  != 0;
+#elif defined(__DragonFly__)
+        // The same shape as FreeBSD's, with a kp_ prefix.
+        const bool ignored = (kiproc.kp_sigignore.__bits[0] & sigmask(SIGQUIT)) != 0;
+        const bool caught  = (kiproc.kp_sigcatch.__bits[0] & sigmask(SIGQUIT))  != 0;
 #elif defined(__OpenBSD__)
         // Plain 32-bit masks, reached without a nested struct.
         const bool ignored = (kiproc.p_sigignore & sigmask(SIGQUIT)) != 0;
