@@ -2035,9 +2035,14 @@ static bool openbsd_kernel_guards_this_stack(char* addr, size_t size, int err) {
   if (err != EPERM || pthread_main_np() != 1) {
     return false;
   }
-  address base = os::current_stack_base();
-  address low  = base - os::current_stack_size();
-  return (address)addr >= low && (address)addr + size <= base;
+  // ss_sp is the top of the stack, measured, and ss_size reaches down.
+  stack_t ss;
+  if (pthread_stackseg_np(pthread_self(), &ss) != 0) {
+    return false;
+  }
+  address top = (address)ss.ss_sp;
+  address low = top - ss.ss_size;
+  return (address)addr >= low && (address)addr + size <= top;
 }
 #endif
 
