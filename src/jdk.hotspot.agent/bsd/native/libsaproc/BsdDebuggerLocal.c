@@ -434,7 +434,43 @@ static int visit_addr(const char* name, const Elf64_Sym* sym, void* arg) {
   return 0;
 }
 
-#ifdef __NetBSD__
+#if defined(__NetBSD__) || defined(__FreeBSD__)
+
+#ifdef __FreeBSD__
+/*
+ * A FreeBSD core names all of its notes "FreeBSD" and tells them apart by
+ * type: one NT_PRSTATUS per thread carrying a prstatus_t, and one
+ * NT_PROCSTAT_AUXV for the process.  Measured on 15.1/amd64, prstatus_t is
+ * 224 bytes with pr_pid at 40 and pr_reg -- a struct reg -- at 48.
+ */
+#define CORE_NOTE_NAME    "FreeBSD"
+#define CORE_NOTE_AUXV    NT_PROCSTAT_AUXV
+#define CORE_NOTE_REGS    NT_PRSTATUS
+#define PRSTATUS_PR_PID   40
+#define PRSTATUS_PR_REG   48
+#define PRSTATUS_SIZE     224
+#else
+#define CORE_NOTE_NAME    ELF_NOTE_NETBSD_CORE_NAME
+#define CORE_NOTE_AUXV    ELF_NOTE_NETBSD_CORE_AUXV
+#define CORE_NOTE_REGS    PT_GETREGS
+#endif
+
+/*
+ * An auxv entry is two 64-bit words on both, but the types do not agree on a
+ * name: NetBSD's AuxInfo calls the second one a_v and FreeBSD's Elf64_Auxinfo
+ * reaches it through a union.  Copy into one of our own instead.
+ */
+typedef struct {
+  uint64_t a_type;
+  uint64_t a_val;
+} core_auxv_t;
+
+static int is_core_auxv_note(const Elf64_Nhdr* nh, const char* name) {
+  return nh->n_type == CORE_NOTE_AUXV &&
+         nh->n_namesz >= sizeof(CORE_NOTE_NAME) &&
+         strncmp(name, CORE_NOTE_NAME, sizeof(CORE_NOTE_NAME)) == 0;
+}
+
 /*
  * AT_PHDR, AT_PHENT and AT_PHNUM are how the executable's own program
  * headers are found in a core: they say where the headers ended up, which
@@ -449,26 +485,35 @@ static void find_core_auxv(const char* notes, size_t size, uintptr_t* phdr,
     size_t namesz = (nh->n_namesz + 3) & ~(size_t)3;
     size_t descsz = (nh->n_descsz + 3) & ~(size_t)3;
     const char* name = notes + off + sizeof(*nh);
-    const AuxInfo* av;
+    const char* av;
     size_t n, j;
 
     if (off + sizeof(*nh) + namesz + descsz > size) {
       return;
     }
-    av = (const AuxInfo*)(name + namesz);
-    n = nh->n_descsz / sizeof(*av);
+    av = name + namesz;
+    n = nh->n_descsz / sizeof(core_auxv_t);
     off += sizeof(*nh) + namesz + descsz;
 
-    if (nh->n_type != ELF_NOTE_NETBSD_CORE_AUXV ||
-        nh->n_namesz != sizeof(ELF_NOTE_NETBSD_CORE_NAME) ||
-        strcmp(name, ELF_NOTE_NETBSD_CORE_NAME) != 0) {
+    if (!is_core_auxv_note(nh, name)) {
       continue;
     }
+#ifdef __FreeBSD__
+    /*
+     * A FreeBSD NT_PROCSTAT_AUXV descriptor opens with the size of one
+     * entry, and the array follows.  That leaves it four bytes out of
+     * alignment, so it is copied rather than cast.
+     */
+    av += sizeof(uint32_t);
+    n = (nh->n_descsz - sizeof(uint32_t)) / sizeof(core_auxv_t);
+#endif
     for (j = 0; j < n; j++) {
-      switch (av[j].a_type) {
-        case AT_PHDR:  *phdr  = (uintptr_t)av[j].a_v; break;
-        case AT_PHENT: *phent = (uintptr_t)av[j].a_v; break;
-        case AT_PHNUM: *phnum = (uintptr_t)av[j].a_v; break;
+      core_auxv_t one;
+      memcpy(&one, av + j * sizeof(one), sizeof(one));
+      switch (one.a_type) {
+        case AT_PHDR:  *phdr  = (uintptr_t)one.a_val; break;
+        case AT_PHENT: *phent = (uintptr_t)one.a_val; break;
+        case AT_PHNUM: *phnum = (uintptr_t)one.a_val; break;
         default: break;
       }
     }
@@ -476,16 +521,20 @@ static void find_core_auxv(const char* notes, size_t size, uintptr_t* phdr,
   }
 }
 
-#endif /* __NetBSD__ */
+#endif /* __NetBSD__ || __FreeBSD__ */
 
-#ifdef __NetBSD__
+#if defined(__NetBSD__) || defined(__FreeBSD__)
 /* ---------------------------------------------------------------- core */
 
 /*
- * A NetBSD core is an ELF whose PT_LOADs carry the writable pages and whose
- * PT_NOTEs carry one "NetBSD-CORE" note per process and a set named
- * "NetBSD-CORE@<lwpid>" per thread, the PT_GETREGS one of which holds the
- * struct reg this file already knows how to unpack.
+ * A core here is an ELF whose PT_LOADs carry the writable pages and whose
+ * PT_NOTEs carry the registers, in one of two arrangements.  NetBSD writes
+ * one "NetBSD-CORE" note per process and a set named "NetBSD-CORE@<lwpid>"
+ * per thread, the PT_GETREGS one of which holds a struct reg.  FreeBSD
+ * names every note "FreeBSD" and writes one NT_PRSTATUS per thread, with
+ * the thread's id inside the descriptor instead of in the note's name.
+ * Either way what comes out is the struct reg this file already knows how
+ * to unpack.
  *
  * The read-only pages are not in the file: the kernel leaves them out
  * because the mapped file still has them, and their PT_LOAD says filesz 0.
@@ -602,7 +651,7 @@ static void add_map(struct ps_prochandle* ph, const Elf64_Phdr* ph_ent) {
 
 /*
  * Notes are laid out namesz/descsz/type followed by the two payloads, each
- * rounded up to four bytes -- NetBSD keeps that alignment in 64-bit cores
+ * rounded up to four bytes -- both keep that alignment in 64-bit cores
  * too, so the ELF64 eight-byte rounding some systems use must not be
  * assumed here.
  */
@@ -622,15 +671,34 @@ static void parse_core_notes(struct ps_prochandle* ph, const char* notes, size_t
     }
     off += sizeof(*nh) + namesz + descsz;
 
+#ifdef __FreeBSD__
+    /*
+     * FreeBSD gives every note the same name and one NT_PRSTATUS per
+     * thread, with the thread's id inside the descriptor rather than in
+     * the note's name.
+     */
+    if (nh->n_type != CORE_NOTE_REGS || nh->n_descsz < PRSTATUS_SIZE ||
+        nh->n_namesz < sizeof(CORE_NOTE_NAME) ||
+        strncmp(name, CORE_NOTE_NAME, sizeof(CORE_NOTE_NAME)) != 0) {
+      continue;
+    }
+    {
+      int32_t pr_pid;
+      memcpy(&pr_pid, desc + PRSTATUS_PR_PID, sizeof(pr_pid));
+      lwpid = (unsigned long)pr_pid;
+    }
+    desc += PRSTATUS_PR_REG;
+#else
     if (nh->n_namesz < sizeof(ELF_NOTE_NETBSD_CORE_NAME) ||
         strncmp(name, ELF_NOTE_NETBSD_CORE_NAME "@",
                 sizeof(ELF_NOTE_NETBSD_CORE_NAME)) != 0) {
       continue;   /* the per-process notes carry nothing this needs */
     }
-    if (nh->n_type != PT_GETREGS || nh->n_descsz < sizeof(struct reg)) {
+    if (nh->n_type != CORE_NOTE_REGS || nh->n_descsz < sizeof(struct reg)) {
       continue;
     }
     lwpid = strtoul(name + sizeof(ELF_NOTE_NETBSD_CORE_NAME), NULL, 10);
+#endif
     if (lwpid != 0) {
       thread_info* t = (thread_info*)calloc(1, sizeof(*t));
       if (t != NULL) {
@@ -726,7 +794,7 @@ static void add_core_lib(struct ps_prochandle* ph, const char* path, uintptr_t l
 }
 
 /*
- * Walks the dynamic linker's list.  A NetBSD core records no file names of
+ * Walks the dynamic linker's list.  A core records no file names of
  * its own -- there is no equivalent of Linux's NT_FILE -- so the only place
  * the shared objects are named is the link map the process itself was
  * holding, reached through the DT_DEBUG entry of the executable.
@@ -1210,10 +1278,10 @@ Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_attach0__Ljava_lang_String_2L
     THROW_NEW_DEBUGGER_EXCEPTION("out of memory");
   }
   ph->core_fd = -1;
-#ifdef __NetBSD__
+#if defined(__NetBSD__) || defined(__FreeBSD__)
   ok = (open_core(ph, exec_str, core_str) == 0);
 #else
-  /* The core reader speaks NetBSD's note format and nothing else yet. */
+  /* OpenBSD's kinfo_vmentry has no path, so a core there names nothing. */
   ok = 0;
 #endif
   (*env)->ReleaseStringUTFChars(env, coreName, core_str);
@@ -1377,7 +1445,7 @@ JNIEXPORT jbyteArray JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_
     failed = (ptrace(PT_IO, ph->pid, (void*)&io, 0) != 0 ||
               io.piod_len != (size_t)numBytes);
   } else {
-#ifdef __NetBSD__
+#if defined(__NetBSD__) || defined(__FreeBSD__)
     failed = (core_read(ph, (uintptr_t)addr, buf, (size_t)numBytes) != 0);
 #else
     failed = 1;
@@ -1408,6 +1476,17 @@ JNIEXPORT jstring JNICALL Java_sun_jvm_hotspot_debugger_bsd_BsdDebuggerLocal_dem
   CHECK_EXCEPTION_(NULL);
   if (sym == NULL) {
     return NULL;
+  }
+  /*
+   * Only an Itanium mangled name starts _Z, and only such a name may be
+   * handed to the demangler.  It is not required to reject anything else,
+   * and FreeBSD's does not: it reads MaxJNILocalCapacity as an M for
+   * pointer-to-member and answers "long long signed char::*", which is
+   * what findpc then prints where the flag's name belongs.
+   */
+  if (sym[0] != '_' || sym[1] != 'Z') {
+    (*env)->ReleaseStringUTFChars(env, jsym, sym);
+    return jsym;
   }
   demangled = __cxa_demangle(sym, NULL, NULL, &status);
   (*env)->ReleaseStringUTFChars(env, jsym, sym);
