@@ -263,7 +263,17 @@ public class Platform {
         }
         if (isAix()) {
             return false; // SA not implemented.
-        } else if (isLinux()) {
+        }
+        if (isOpenBsd()) {
+            // SA finds what a process has mapped, and from where, through
+            // kinfo_getvmmap(3).  OpenBSD's kinfo_vmentry carries the ranges
+            // but no path, so there is no way to say which file a mapping
+            // came from, and without that there are no load objects and no
+            // symbols to read out of them.  Not implemented, rather than
+            // implemented badly.
+            return false;
+        }
+        if (isLinux()) {
             if (isS390x() || isARM()) {
                 return false; // SA not implemented.
             }
