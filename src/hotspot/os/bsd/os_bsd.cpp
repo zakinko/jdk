@@ -1958,11 +1958,18 @@ bool os::pd_create_stack_guard_pages(char* addr, size_t size) {
   // that fault are the ones this function guards.  Nothing below the stack
   // pointer is live, and a failure here is not fatal -- it costs the pages
   // above the guard, which is what would have happened anyway.
+  // pd_commit_memory rather than commit_memory: this is not a new
+  // commitment, only the mapping the thread stack was already reserved for,
+  // and os::commit_memory would record it with NMT.  NMT finds the boundary
+  // between a stack's guard pages and its usable part by looking for the
+  // committed region it recorded, so a record covering the whole stack makes
+  // it report the stack as fully committed whatever is resident -- which is
+  // what runtime/Thread/TestAlwaysPreTouchStacks measures.
   char* const untouched = addr + size;
   char* const sp = align_down((char*)os::current_stack_pointer() - os::vm_page_size(),
                               os::vm_page_size());
   if (sp > untouched) {
-    os::commit_memory(untouched, sp - untouched, !ExecMem);
+    os::pd_commit_memory(untouched, sp - untouched, !ExecMem);
   }
 #endif
   return os::commit_memory(addr, size, !ExecMem);
@@ -1975,9 +1982,9 @@ void os::remove_stack_guard_pages(char* addr, size_t size) {
 // 'requested_addr' is only treated as a hint, the return value may or
 // may not start from the requested address. Unlike Bsd mmap(), this
 // function returns null to indicate failure.
-static char* anon_mmap(char* requested_addr, size_t bytes, bool exec) {
+static char* anon_mmap(char* requested_addr, size_t bytes, bool exec, int extra_flags = 0) {
   // MAP_FIXED is intentionally left out, to leave existing mappings intact.
-  const int flags = MAP_PRIVATE | MAP_NORESERVE | MAP_ANONYMOUS
+  const int flags = MAP_PRIVATE | MAP_NORESERVE | MAP_ANONYMOUS | extra_flags
       MACOS_ONLY(| (exec ? MAP_JIT : 0));
 
   // Map reserved/uncommitted pages PROT_NONE so we fail early if we
@@ -2102,6 +2109,15 @@ char* os::pd_attempt_reserve_memory_at(char* requested_addr, size_t bytes, bool 
   // in one of the methods further up the call chain.  See bug 5044738.
   assert(bytes % os::vm_page_size() == 0, "reserving unexpected size block");
 
+#ifdef __FreeBSD__
+  // FreeBSD does not honour the address hint: with ASLR on, a range it has
+  // just given back comes back somewhere else, three times out of three
+  // when measured.  MAP_FIXED | MAP_EXCL is what Linux's MAP_FIXED_NOREPLACE
+  // is -- the address asked for if it is free, and failure rather than a
+  // clobbered mapping if it is not -- so ask that way.
+  char* addr = anon_mmap(requested_addr, bytes, exec, MAP_FIXED | MAP_EXCL);
+  return addr == requested_addr ? addr : nullptr;
+#else
   // Bsd mmap allows caller to pass an address as hint; give it a try first,
   // if kernel honors the hint then we can return immediately.
   char * addr = anon_mmap(requested_addr, bytes, exec);
@@ -2115,6 +2131,7 @@ char* os::pd_attempt_reserve_memory_at(char* requested_addr, size_t bytes, bool 
   }
 
   return nullptr;
+#endif
 }
 
 size_t os::vm_min_address() {

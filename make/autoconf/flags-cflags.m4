@@ -890,12 +890,28 @@ AC_DEFUN([FLAGS_SETUP_CFLAGS_CPU_DEP],
     )
   fi
 
+  # OpenBSD's compiler protects every return with retguard: the prologue
+  # stores the return address XORed with a per-function cookie and the
+  # epilogue checks it, trapping with int3 on a mismatch.  HotSpot rewrites
+  # return addresses on the stack -- deoptimization patches them, and a
+  # thawed continuation carries frames copied in from elsewhere -- so a
+  # protected runtime function returning into one of those dies with
+  # SIGTRAP and no hs_err, since the VM does not handle SIGTRAP on x86.
+  # Every test that parks a virtual thread on a monitor went that way.
+  # The flag is OpenBSD's own, so ask the compiler before using it.
+  $1_RETGUARD_CFLAGS_JVM=
+  if test "x$FLAGS_OS" = xbsd; then
+    FLAGS_COMPILER_CHECK_ARGUMENTS(ARGUMENT: [-fno-ret-protector],
+        PREFIX: $3,
+        IF_TRUE: [$1_RETGUARD_CFLAGS_JVM="-fno-ret-protector"])
+  fi
+
   # EXPORT to API
   CFLAGS_JVM_COMMON="$ALWAYS_CFLAGS_JVM $ALWAYS_DEFINES_JVM \
       $TOOLCHAIN_CFLAGS_JVM ${$1_TOOLCHAIN_CFLAGS_JVM} \
       $OS_CFLAGS $OS_CFLAGS_JVM $CFLAGS_OS_DEF_JVM $DEBUG_CFLAGS_JVM \
       $WARNING_CFLAGS_JVM $JVM_PICFLAG $FILE_MACRO_CFLAGS \
-      $REPRODUCIBLE_CFLAGS $BRANCH_PROTECTION_CFLAGS"
+      $REPRODUCIBLE_CFLAGS $BRANCH_PROTECTION_CFLAGS ${$1_RETGUARD_CFLAGS_JVM}"
 
   CFLAGS_JDK_COMMON="$ALWAYS_DEFINES_JDK $TOOLCHAIN_CFLAGS_JDK \
       $OS_CFLAGS $CFLAGS_OS_DEF_JDK $DEBUG_CFLAGS_JDK $DEBUG_OPTIONS_FLAGS_JDK \
