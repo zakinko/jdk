@@ -1805,23 +1805,7 @@ static void warn_fail_commit_memory(char* addr, size_t size, bool exec,
 //       problem.
 bool os::pd_commit_memory(char* addr, size_t size, bool exec) {
   int prot = exec ? PROT_READ|PROT_WRITE|PROT_EXEC : PROT_READ|PROT_WRITE;
-#if defined(__OpenBSD__)
-  // XXX: Work-around mmap/MAP_FIXED bug temporarily on OpenBSD
-  Events::log_memprotect(nullptr, "Protecting memory [" INTPTR_FORMAT "," INTPTR_FORMAT "] with protection modes %x", p2i(addr), p2i(addr+size), prot);
-  // mprotect(2) rounds an unaligned addr down to its page where mmap(2)
-  // with MAP_FIXED rejects it, so refuse here what the mmap path would.
-  if (!is_aligned(addr, os::vm_page_size())) {
-    errno = EINVAL;
-  } else if (::mprotect(addr, size, prot) == 0) {
-    return true;
-  }
-  {
-    ErrnoPreserver ep;
-    log_trace(os, map)("mprotect failed: " RANGEFMT " errno=(%s)",
-                       RANGEFMTARGS(addr, size),
-                       os::strerror(ep.saved_errno()));
-  }
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
   if (exec) {
     // Do not replace MAP_JIT mappings, see JDK-8234930
     if (::mprotect(addr, size, prot) == 0) {
@@ -1932,23 +1916,7 @@ bool os::numa_get_group_ids_for_range(const void** addresses, int* lgrp_ids, siz
 }
 
 bool os::pd_uncommit_memory(char* addr, size_t size, bool exec) {
-#if defined(__OpenBSD__)
-  // XXX: Work-around mmap/MAP_FIXED bug temporarily on OpenBSD
-  Events::log_memprotect(nullptr, "Protecting memory [" INTPTR_FORMAT "," INTPTR_FORMAT "] with PROT_NONE", p2i(addr), p2i(addr+size));
-  // See pd_commit_memory: keep an unaligned addr failing as it does with mmap.
-  if (!is_aligned(addr, os::vm_page_size())) {
-    errno = EINVAL;
-  } else if (::mprotect(addr, size, PROT_NONE) == 0) {
-    return true;
-  }
-  {
-    ErrnoPreserver ep;
-    log_trace(os, map)("mprotect failed: " RANGEFMT " errno=(%s)",
-                       RANGEFMTARGS(addr, size),
-                       os::strerror(ep.saved_errno()));
-    return false;
-  }
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
   if (exec) {
     if (::madvise(addr, size, MADV_FREE) != 0) {
       ErrnoPreserver ep;
