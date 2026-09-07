@@ -53,9 +53,10 @@ static int TEST_FAILED=1;
 // This variable is used to notify whether signal has been received or not.
 static volatile sig_atomic_t sig_received = 0;
 
-// OpenBSD dropped the obsolete sigset(3), so the sigset mode cannot be
-// built there.  SigTestDriver skips it for the same reason.
-#if defined(__OpenBSD__)
+// OpenBSD dropped the obsolete sigset(3) and DragonFly never had it --
+// neither declares it nor carries the symbol in libc -- so the sigset mode
+// cannot be built there.  SigTestDriver skips it for the same reason.
+#if defined(__OpenBSD__) || defined(__DragonFly__)
   #define HAVE_SIGSET 0
 #else
   #define HAVE_SIGSET 1

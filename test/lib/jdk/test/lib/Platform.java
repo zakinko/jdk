@@ -121,6 +121,10 @@ public class Platform {
         return isOs("openbsd");
     }
 
+    public static boolean isDragonFly() {
+        return isOs("dragonfly");
+    }
+
     public static boolean isBusybox(String tool) {
         try {
             Path toolpath = Paths.get(tool);
