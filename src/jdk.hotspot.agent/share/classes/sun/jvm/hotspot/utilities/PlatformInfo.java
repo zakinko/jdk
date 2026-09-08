@@ -39,6 +39,8 @@ public class PlatformInfo {
       return "bsd";
     } else if (os.equals("OpenBSD")) {
       return "bsd";
+    } else if (os.equals("DragonFly")) {
+      return "bsd";
     } else if (os.contains("Darwin") || os.contains("OS X")) {
       return "darwin";
     } else if (os.startsWith("Windows")) {
