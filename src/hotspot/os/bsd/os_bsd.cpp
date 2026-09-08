@@ -2163,13 +2163,26 @@ char* os::pd_attempt_reserve_memory_at(char* requested_addr, size_t bytes, bool 
   // in one of the methods further up the call chain.  See bug 5044738.
   assert(bytes % os::vm_page_size() == 0, "reserving unexpected size block");
 
-#ifdef __FreeBSD__
-  // FreeBSD does not honour the address hint: with ASLR on, a range it has
-  // just given back comes back somewhere else, three times out of three
-  // when measured.  MAP_FIXED | MAP_EXCL is what Linux's MAP_FIXED_NOREPLACE
-  // is -- the address asked for if it is free, and failure rather than a
-  // clobbered mapping if it is not -- so ask that way.
-  char* addr = anon_mmap(requested_addr, bytes, exec, MAP_FIXED | MAP_EXCL);
+#if defined(__FreeBSD__) || defined(__DragonFly__)
+  // Neither of these will place a mapping at a hint.  FreeBSD does not honour
+  // it at all: with ASLR on, a range it has just given back comes back
+  // somewhere else, three times out of three when measured.  DragonFly honours
+  // it only where nothing is in the way -- asked for a page inside a hole
+  // between two mappings it answers with the first free address above them
+  // instead, sixteen times out of sixteen -- so os::attempt_reserve_memory_at
+  // could never reserve inside a hole, and attempt_reserve_memory_between
+  // returned nothing at all.
+  //
+  // Both have a flag that means what Linux's MAP_FIXED_NOREPLACE means: the
+  // address asked for if it is free, and failure rather than a clobbered
+  // mapping if it is not.  They spell it differently, and DragonFly has no
+  // MAP_EXCL.
+  #ifdef __FreeBSD__
+    const int nonclobbering = MAP_FIXED | MAP_EXCL;
+  #else
+    const int nonclobbering = MAP_TRYFIXED;
+  #endif
+  char* addr = anon_mmap(requested_addr, bytes, exec, nonclobbering);
   return addr == requested_addr ? addr : nullptr;
 #else
   // Bsd mmap allows caller to pass an address as hint; give it a try first,
