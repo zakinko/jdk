@@ -268,13 +268,13 @@ public class Platform {
         if (isAix()) {
             return false; // SA not implemented.
         }
-        if (isOpenBsd()) {
+        if (isOpenBsd() || isDragonFly()) {
             // SA finds what a process has mapped, and from where, through
             // kinfo_getvmmap(3).  OpenBSD's kinfo_vmentry carries the ranges
             // but no path, so there is no way to say which file a mapping
-            // came from, and without that there are no load objects and no
-            // symbols to read out of them.  Not implemented, rather than
-            // implemented badly.
+            // came from; DragonFly has neither the function nor the struct.
+            // Without them there are no load objects and no symbols to read
+            // out of them.  Not implemented, rather than implemented badly.
             return false;
         }
         if (isLinux()) {
