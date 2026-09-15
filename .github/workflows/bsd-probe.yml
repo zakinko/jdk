@@ -1,0 +1,26 @@
+#
+# Measure how far openjdk/bsd-port's own branch is from cross-building for the
+# four BSDs.
+#
+# Nothing here is meant to be sent anywhere. The question it answers is which
+# base to build on: that project and this port arrived at the same design --
+# the same bsd.freebsd / bsd.openbsd / bsd.netbsd naming in platform.m4 -- so
+# the useful thing to know is how much of the distance is already covered on
+# their side, and that is a measurement, not an opinion.
+#
+name: 'BSD probe'
+
+on:
+  push:
+    branches:
+      - bsdport-probe
+  workflow_dispatch:
+
+concurrency:
+  group: bsd-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    uses: ./.github/workflows/build-bsd.yml
