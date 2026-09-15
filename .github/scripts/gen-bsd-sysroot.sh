@@ -55,7 +55,10 @@ case "$os" in
   netbsd)
     # comp holds the headers and the static libraries.  The X11 sets are not
     # fetched: the build is headless, see below.
-    base=https://cdn.netbsd.org/pub/NetBSD/NetBSD-11.0/amd64/binary/sets
+    # A JDK built against an older release still runs on the newer ones, so a
+    # bootstrap kit meant to build this source wants the oldest release it
+    # must serve.
+    base=https://cdn.netbsd.org/pub/NetBSD/NetBSD-${NETBSD_SETS_VERSION:-11.0}/amd64/binary/sets
     for set in base comp; do
       fetch "$set.tar.xz" "$base/$set.tar.xz"
       extract "$set.tar.xz"

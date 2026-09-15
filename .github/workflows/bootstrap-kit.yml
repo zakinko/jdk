@@ -1,0 +1,112 @@
+#
+# Cross-build a NetBSD/amd64 JDK and keep the bundle.
+#
+# This is not part of the BSD port that goes upstream.  It exists so that the
+# port can be built and tested on a NetBSD machine without a boot JDK that
+# runs under Linux emulation: JDK 28 takes a 26, 27 or 28 boot JDK, and there
+# is no NetBSD build of any of them but the one this makes from the port
+# itself.
+#
+# What comes out is a candidate, not a verified boot JDK: nothing here runs a
+# line of it.  That has to happen on a NetBSD machine.
+#
+name: 'Bootstrap kit (netbsd)'
+
+on:
+  push:
+    branches:
+      - bootstrap-kit-28
+  workflow_dispatch:
+    inputs:
+      netbsd-version:
+        description: 'NetBSD release to build the sysroot from'
+        required: false
+        default: '10.1'
+
+concurrency:
+  group: bootstrap-kit-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The kit has to run on every NetBSD it is meant to serve, so build it against
+  # the oldest one rather than the newest.  9.4 does not work: its headers have
+  # no PTHREAD_STACK_MIN, which os_posix.cpp needs.  10.1 is the oldest release
+  # this can be built against, so a kit from here serves 10 and 11.
+  NETBSD_SETS_VERSION: ${{ inputs.netbsd-version || '10.1' }}
+
+jobs:
+  kit:
+    name: 'cross build'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 'Checkout the JDK source'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: 'Get the BootJDK'
+        id: bootjdk
+        uses: ./.github/actions/get-bootjdk
+        with:
+          platform: linux-x64
+
+      - name: 'Install toolchain and dependencies'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --only-upgrade apt
+          sudo apt-get install clang lld llvm autoconf zip unzip file \
+              libarchive-tools libcups2-dev libfontconfig1-dev
+
+      - name: 'Check cache for sysroot'
+        id: get-cached-sysroot
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: sysroot
+          key: sysroot-netbsd-${{ env.NETBSD_SETS_VERSION }}-${{ hashFiles('./.github/scripts/gen-bsd-sysroot.sh') }}
+
+      - name: 'Create sysroot'
+        run: bash .github/scripts/gen-bsd-sysroot.sh netbsd sysroot
+        if: steps.get-cached-sysroot.outputs.cache-hit != 'true'
+
+      - name: 'Prepare the cross compiler'
+        run: >
+          bash .github/scripts/gen-bsd-crosstool.sh
+          netbsd x86_64-unknown-netbsd "$PWD/sysroot" "$PWD/cross-bin"
+
+      - name: 'Configure'
+        run: >
+          PATH="$PWD/cross-bin:$PATH"
+          bash configure
+          --with-conf-name=bsd-x86_64-netbsd
+          --with-boot-jdk=${{ steps.bootjdk.outputs.path }}
+          --openjdk-target=x86_64-unknown-netbsd
+          --with-sysroot=$PWD/sysroot
+          --with-toolchain-type=clang
+          --with-freetype=bundled
+          --enable-headless-only
+          --disable-dtrace
+          --disable-precompiled-headers
+          --with-jmod-compress=zip-1
+          --with-external-symbols-in-bundles=none
+          CC=x86_64-unknown-netbsd-clang
+          CXX=x86_64-unknown-netbsd-clang++
+          BUILD_CC=clang
+          BUILD_CXX=clang++
+          || (echo "Dumping config.log:" && cat config.log && exit 1)
+
+      - name: 'Build the bundle'
+        run: make LOG=info product-bundles
+
+      - name: 'Name what came out'
+        id: bundle
+        run: |
+          set -e
+          ls -l build/bsd-x86_64-netbsd/bundles/
+          jdk="$(ls build/bsd-x86_64-netbsd/bundles/jdk-*_bin.tar.gz | head -1)"
+          echo "path=$jdk" >> $GITHUB_OUTPUT
+
+      - name: 'Upload the bundle'
+        uses: actions/upload-artifact@v6
+        with:
+          name: jdk-netbsd${{ env.NETBSD_SETS_VERSION }}-x86_64
+          path: ${{ steps.bundle.outputs.path }}
+          retention-days: 14
