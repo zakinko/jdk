@@ -337,7 +337,7 @@ bool PosixSignals::pd_hotspot_signal_handler(int sig, siginfo_t* info,
         }
       } else if (sig == SIGILL && nativeInstruction_at(pc)->is_stop()) {
         // A pointer to the message will have been placed in r0
-        const char *detail_msg = (const char *)(uc->uc_mcontext->DU3_PREFIX(ss,x[0]));
+        const char *detail_msg = (const char *)(uc->context_x[0]);
         const char *msg = "stop";
         if (TraceTraps) {
           tty->print_cr("trap: %s: (SIGILL)", msg);
@@ -462,7 +462,10 @@ void os::print_context(outputStream *st, const void *context) {
   st->print("  sp=" INTPTR_FORMAT, (intptr_t)uc->context_sp);
   st->cr();
   st->print(  "pc=" INTPTR_FORMAT,  (intptr_t)uc->context_pc);
+#ifdef __APPLE__
+  // Only Darwin's mcontext carries the saved processor state register.
   st->print(" cpsr=" INTPTR_FORMAT, (intptr_t)uc->context_cpsr);
+#endif
   st->cr();
 }
 
