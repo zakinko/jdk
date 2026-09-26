@@ -179,6 +179,18 @@ W
     # package, and whatever links against libjvm has to find it again.
     common_extra="-isystem $sysroot/usr/local/include -L$sysroot/usr/local/lib \
         -Wl,-rpath-link=$sysroot/usr/local/lib"
+    # Upstream LLVM cannot emit OpenBSD's stack protector on aarch64.
+    # OpenBSD keeps the canary in __guard_local rather than in
+    # __stack_chk_guard, and the aarch64 back end expands its
+    # LOAD_STACK_GUARD from a lookup of __stack_chk_guard alone, so every
+    # function that gets a canary crashes clang 18, 19 and 20 alike in
+    #   Running pass 'Post-RA pseudo instruction expansion pass'
+    # -- two lines of C with a char buffer are enough to show it.
+    # OpenBSD's own clang carries a local patch for this.  The JDK asks
+    # for -fstack-protector itself, so the switch goes after its flags.
+    case "$triple" in
+      aarch64-*) late_extra="-fno-stack-protector" ;;
+    esac
     ;;
   *)
     cxx_extra=""
@@ -187,6 +199,7 @@ W
     ;;
 esac
 : "${common_extra:=}"
+: "${late_extra:=}"
 : "${ld_path:=}"
 if [ -n "$ld_path" ]; then ld_flag="--ld-path=$ld_path"; else ld_flag="-fuse-ld=lld"; fi
 
@@ -203,7 +216,7 @@ for tool in clang clang++; do
 exec /usr/bin/$tool$llvm_suffix --target=$triple --sysroot=$sysroot \\
   -Wno-unused-command-line-argument \\
   $rt_extra $ld_flag $common_extra $extra \\
-  -include $fixups "\$@" $link_extra
+  -include $fixups "\$@" $late_extra $link_extra
 W
   chmod +x "$bindir/$triple-$tool"
 done
