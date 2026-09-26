@@ -105,17 +105,29 @@ case "$os" in
     # script, and clang names the dynamic linker, the crt files and the
     # libraries itself, so the Linux emulation links the same thing.  The
     # other machines are asked for generic emulations that Debian has.
+    # A long link line -- libjvm's -- reaches ld as a response file, so
+    # the name is rewritten inside those too.
     if [ "$gnu" = arm-linux-gnueabihf ]; then
       cat > "$bindir/$triple-ld" <<W
 #!/bin/sh
+tmp=\$(mktemp -d)
+trap 'rm -rf "\$tmp"' EXIT
+n=0
 for a; do
   shift
   case "\$a" in
     armelf_nbsd_eabihf) a=armelf_linux_eabi ;;
+    @*)
+      if [ -f "\${a#@}" ]; then
+        n=\$((n + 1))
+        sed 's/armelf_nbsd_eabihf/armelf_linux_eabi/g' "\${a#@}" > "\$tmp/\$n"
+        a="@\$tmp/\$n"
+      fi
+      ;;
   esac
   set -- "\$@" "\$a"
 done
-exec $ld_path "\$@"
+$ld_path "\$@"
 W
       chmod +x "$bindir/$triple-ld"
       ld_path="$bindir/$triple-ld"
