@@ -9,6 +9,10 @@
 # riscv64 is taken from NetBSD 11.0, the first release with a riscv-riscv64
 # port; the others stay on 10.1 for the reason gen-bsd-sysroot.sh gives.
 #
+# Once the HotSpot builds are through, tier1 runs on a real NetBSD 10.1 for
+# both of them, in a VM on the runner, from the bundles the build uploaded.
+# The Zero machines stop at the build: there is nothing here to run them on.
+#
 name: 'BSD NetBSD'
 
 on:
@@ -61,3 +65,41 @@ jobs:
            "target-triple":"riscv64-unknown-netbsd",
            "conf-name":"bsd-riscv64-netbsd",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"}]}
+
+  # get-jtreg in the test jobs downloads an artifact somebody has to have
+  # built; upstream's main.yml does it in its preparation job.
+  jtreg:
+    name: jtreg
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 'Checkout the scripts'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: |
+            .github
+            make/conf/github-actions.conf
+
+      - name: 'Build JTReg'
+        uses: ./.github/actions/build-jtreg
+
+  tier1-x86_64:
+    name: tier1 x86_64
+    needs: [jtreg, hotspot]
+    uses: ./.github/workflows/test-bsd.yml
+    with:
+      target-os: 'netbsd'
+      platform: 'bsd-x86_64-netbsd'
+      release: '10.1'
+
+  # The 21 branch runs this on an arm64 runner; that runner has no
+  # /dev/kvm, so the guest is emulated there as it would be anywhere.
+  tier1-aarch64:
+    name: tier1 aarch64
+    needs: [jtreg, hotspot]
+    uses: ./.github/workflows/test-bsd.yml
+    with:
+      target-os: 'netbsd'
+      platform: 'bsd-aarch64-netbsd'
+      arch: 'aarch64'
+      runner: 'ubuntu-24.04-arm'
+      release: '10.1'
