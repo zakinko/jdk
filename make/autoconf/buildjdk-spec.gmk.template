@@ -102,6 +102,14 @@ JVM_VARIANTS := server
 JVM_VARIANT_MAIN := server
 JVM_FEATURES_server := cds compiler1 compiler2 g1gc serialgc
 
+# The fallback linker is on by default when the target is built as Zero, and
+# the build JDK is not Zero.  Left inherited, it compiles libfallbackLinker
+# for the build machine against the target's libffi headers, and a cross
+# build for riscv64 stops at libffi's own check:
+#   ffitarget.h:36:2: error: "libffi was configured for a RISC-V target but
+#   this does not appear to be a RISC-V compiler."
+ENABLE_FALLBACK_LINKER := false
+
 # Some users still set EXTRA_*FLAGS on the make command line. Must
 # make sure to override that when building buildjdk.
 override EXTRA_CFLAGS :=
