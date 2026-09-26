@@ -98,6 +98,28 @@ case "$os" in
       echo "$0: no GNU ld for $gnu; install binutils-$gnu" >&2
       exit 1
     fi
+    # clang asks for NetBSD's own emulation on 32-bit arm, and Debian's ld
+    # was built with only the Linux ones, so it stops at
+    #   unrecognised emulation mode: armelf_nbsd_eabihf
+    # before reading an object.  The two differ in the default linker
+    # script, and clang names the dynamic linker, the crt files and the
+    # libraries itself, so the Linux emulation links the same thing.  The
+    # other machines are asked for generic emulations that Debian has.
+    if [ "$gnu" = arm-linux-gnueabihf ]; then
+      cat > "$bindir/$triple-ld" <<W
+#!/bin/sh
+for a; do
+  shift
+  case "\$a" in
+    armelf_nbsd_eabihf) a=armelf_linux_eabi ;;
+  esac
+  set -- "\$@" "\$a"
+done
+exec $ld_path "\$@"
+W
+      chmod +x "$bindir/$triple-ld"
+      ld_path="$bindir/$triple-ld"
+    fi
     # The Zero targets call through libffi, which NetBSD ships in pkgsrc,
     # so it lands under usr/pkg rather than usr/lib.  Anything that links
     # against libjvm has to be able to find it a second time -- the gtest
