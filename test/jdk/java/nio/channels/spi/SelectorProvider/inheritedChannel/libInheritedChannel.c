@@ -156,7 +156,10 @@ JNIEXPORT void JNICALL Java_Launcher_launch0
     }
 
     while ((dirp = readdir(dp)) != NULL) {
-        if (isdigit(dirp->d_name[0])) {
+        // NetBSD's isdigit() indexes a table with what it is given, so a
+        // plain char reaches it as a possibly negative subscript.  The cast
+        // is what the C standard asks for here, whatever the header does.
+        if (isdigit((unsigned char)dirp->d_name[0])) {
             int fd = strtol(dirp->d_name, NULL, 10);
             if (fd != serviceFd && fd != thisFd) {
                 close(fd);
