@@ -466,7 +466,7 @@ bool CodeCache::heap_available(CodeBlobType code_blob_type) {
     // Tiered compilation: use all code heaps including
     // the hot code heap when it is present.
 
-    if (COMPILER2_PRESENT(!HotCodeHeap &&) (code_blob_type == CodeBlobType::MethodHot)) {
+    if (COMPILER2_PRESENT(!HotCodeHeap &&) code_blob_type == CodeBlobType::MethodHot) {
       return false;
     }
 
