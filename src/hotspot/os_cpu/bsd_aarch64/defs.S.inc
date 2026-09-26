@@ -32,9 +32,11 @@
 #else
   #define SYMBOL(s) s
 
+  # ELF separates statements with ; -- %% is the Mach-O arm64 spelling, and
+  # the ELF assembler stops at it with "unexpected token".
   #define DECLARE_FUNC(func) \
-    .globl func %% \
-    .hidden func %% \
-    .type func, %function %% \
+    .globl func ; \
+    .hidden func ; \
+    .type func, %function ; \
     func
 #endif
