@@ -124,6 +124,7 @@ $(eval $(call SetupJdkLibrary, BUILD_GTEST_LIBJVM, \
         self-assign-overloaded, \
     DISABLED_WARNINGS_clang_test_g1ServiceThread.cpp := delete-abstract-non-virtual-dtor, \
     DISABLED_WARNINGS_clang_test_logDecorations.cpp := missing-field-initializers, \
+    DISABLED_WARNINGS_clang_test_metablock.cpp := array-bounds, \
     DISABLED_WARNINGS_microsoft := $(DISABLED_WARNINGS_microsoft) 4530, \
     LD_SET_ORIGIN := false, \
     DEFAULT_LDFLAGS := false, \

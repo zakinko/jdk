@@ -127,7 +127,7 @@ void CDSConfig::ergo_initialize() {
 
   if (!AOTMetaspace::shared_base_valid((char*)SharedBaseAddress)) {
      log_warning(cds)("SharedBaseAddress " PTR_FORMAT " is invalid. Reverting to " PTR_FORMAT,
-                 p2i((void*)SharedBaseAddress), p2i((void*)DEFAULT_SHARED_BASE_ADDRESS));
+                 p2i((void*)SharedBaseAddress), (uintptr_t)DEFAULT_SHARED_BASE_ADDRESS);
      FLAG_SET_ERGO(SharedBaseAddress, DEFAULT_SHARED_BASE_ADDRESS);
   }
 }

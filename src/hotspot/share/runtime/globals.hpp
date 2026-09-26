@@ -1278,7 +1278,8 @@ const int ObjectAlignmentInBytes = 8;
   product(double, SafepointTimeoutDelay, 10000,                             \
           "Delay in milliseconds for option SafepointTimeout; "             \
           "supports sub-millisecond resolution with fractional values.")    \
-          range(0, max_jlongDouble LP64_ONLY(/MICROUNITS))                  \
+          range(0, LP64_ONLY(max_jlongDouble / MICROUNITS)                  \
+                   NOT_LP64((double)max_jlongDouble))                       \
                                                                             \
   product(bool, UseSystemMemoryBarrier, false,                              \
           "Try to enable system memory barrier if supported by OS")         \
