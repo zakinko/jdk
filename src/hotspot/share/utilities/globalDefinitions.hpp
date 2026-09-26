@@ -1173,6 +1173,16 @@ static inline julong g_uabs(julong n) {
 }
 static inline julong g_uabs(jlong n) { return g_uabs((julong)n); }
 static inline unsigned int g_uabs(int n) { return g_uabs((unsigned int)n); }
+// jlong is int64_t, which OpenBSD spells long long, so a long -- a pointer
+// difference, an intptr_t -- is no nearer one of the above than another and
+// the call is ambiguous.  Take long and unsigned long wherever they are
+// types of their own.
+template <typename T, std::enable_if_t<std::is_same<T, long>::value &&
+                                       !std::is_same<long, jlong>::value, int> = 0>
+static inline julong g_uabs(T n) { return g_uabs((jlong)n); }
+template <typename T, std::enable_if_t<std::is_same<T, unsigned long>::value &&
+                                       !std::is_same<unsigned long, julong>::value, int> = 0>
+static inline julong g_uabs(T n) { return g_uabs((julong)n); }
 
 // "to" should be greater than "from."
 inline size_t byte_size(void* from, void* to) {
