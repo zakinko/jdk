@@ -1,0 +1,62 @@
+#
+# Cross-build NetBSD for every machine it runs on that this tree can target.
+#
+# x86_64 and aarch64 have HotSpot ports on the BSDs; the rest do not, and are
+# built as Zero, which calls through libffi from pkgsrc.  x86_64 is already
+# built by the bsd job in main.yml; it is here as well so that this workflow
+# says, on its own, whether the NetBSD build as a whole holds.
+#
+# riscv64 is taken from NetBSD 11.0, the first release with a riscv-riscv64
+# port; the others stay on 10.1 for the reason gen-bsd-sysroot.sh gives.
+#
+name: 'BSD NetBSD'
+
+on:
+  push:
+    branches:
+      - netbsd-arches-28
+  workflow_dispatch:
+
+concurrency:
+  group: bsd-netbsd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hotspot:
+    name: hotspot
+    uses: ./.github/workflows/build-bsd.yml
+    with:
+      targets: >-
+        {"include":[
+          {"target-os":"netbsd","arch":"x86_64",
+           "target-triple":"x86_64-unknown-netbsd",
+           "conf-name":"bsd-x86_64-netbsd",
+           "extra-configure":""},
+          {"target-os":"netbsd","arch":"aarch64",
+           "target-triple":"aarch64-unknown-netbsd",
+           "conf-name":"bsd-aarch64-netbsd",
+           "extra-configure":""}]}
+
+  zero:
+    name: zero
+    uses: ./.github/workflows/build-bsd.yml
+    with:
+      extra-conf-options: '--with-jvm-variants=zero'
+      targets: >-
+        {"include":[
+          {"target-os":"netbsd","arch":"i386",
+           "target-triple":"i386-unknown-netbsd",
+           "conf-name":"bsd-i386-netbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
+          {"target-os":"netbsd","arch":"sparc64",
+           "target-triple":"sparc64-unknown-netbsd",
+           "conf-name":"bsd-sparc64-netbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib --with-extra-cflags=-mcmodel=medany --with-extra-cxxflags=-mcmodel=medany"},
+          {"target-os":"netbsd","arch":"armv7",
+           "target-triple":"armv7-unknown-netbsd-eabihf",
+           "conf-name":"bsd-arm-netbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
+          {"target-os":"netbsd","arch":"riscv64",
+           "target-triple":"riscv64-unknown-netbsd",
+           "conf-name":"bsd-riscv64-netbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"}]}

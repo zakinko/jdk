@@ -52,6 +52,24 @@ on:
         required: false
         type: boolean
         default: false
+      targets:
+        description: 'JSON matrix of targets to cross-build'
+        required: false
+        type: string
+        default: >-
+          {"include":[
+            {"target-os":"netbsd","arch":"x86_64",
+             "target-triple":"x86_64-unknown-netbsd",
+             "conf-name":"bsd-x86_64-netbsd"},
+            {"target-os":"freebsd","arch":"x86_64",
+             "target-triple":"x86_64-unknown-freebsd15.1",
+             "conf-name":"bsd-x86_64-freebsd"},
+            {"target-os":"openbsd","arch":"x86_64",
+             "target-triple":"x86_64-unknown-openbsd7.9",
+             "conf-name":"bsd-x86_64-openbsd"},
+            {"target-os":"dragonfly","arch":"x86_64",
+             "target-triple":"x86_64-unknown-dragonfly",
+             "conf-name":"bsd-x86_64-dragonfly"}]}
 
 jobs:
   build-bsd:
@@ -60,25 +78,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix:
-        target-os:
-          - netbsd
-          - freebsd
-          - openbsd
-          - dragonfly
-        include:
-          - target-os: netbsd
-            target-triple: x86_64-unknown-netbsd
-            conf-name: bsd-x86_64-netbsd
-          - target-os: freebsd
-            target-triple: x86_64-unknown-freebsd15.1
-            conf-name: bsd-x86_64-freebsd
-          - target-os: openbsd
-            target-triple: x86_64-unknown-openbsd7.9
-            conf-name: bsd-x86_64-openbsd
-          - target-os: dragonfly
-            target-triple: x86_64-unknown-dragonfly
-            conf-name: bsd-x86_64-dragonfly
+      matrix: ${{ fromJSON(inputs.targets) }}
 
     steps:
       - name: 'Checkout the JDK source'
@@ -100,17 +100,37 @@ jobs:
           sudo apt-get install --only-upgrade apt
           sudo apt-get install clang lld llvm autoconf zip unzip file \
               libarchive-tools libcups2-dev libfontconfig1-dev
+          # NetBSD links with GNU ld rather than lld, and GNU ld knows only
+          # the architecture it was built for, so the target's own binutils
+          # has to be installed.  x86_64's comes with the runner.
+          # A target may ask for a particular LLVM; clang 18 crashes in the
+          # post-RA pass on aarch64-unknown-openbsd.
+          if [ -n '${{ matrix.llvm-suffix }}' ]; then
+            v=$(echo '${{ matrix.llvm-suffix }}' | tr -d -)
+            sudo apt-get install "clang-$v" "lld-$v" "llvm-$v"
+          fi
+          if [ '${{ matrix.target-os }}' = netbsd ]; then
+            case '${{ matrix.arch }}' in
+              x86_64) gnu= ;;
+              i386)   gnu=i686-linux-gnu ;;
+              armv7)  gnu=arm-linux-gnueabihf ;;
+              *)      gnu='${{ matrix.arch }}-linux-gnu' ;;
+            esac
+            [ -z "$gnu" ] || sudo apt-get install "binutils-$gnu"
+          fi
 
       - name: 'Check cache for sysroot'
         id: get-cached-sysroot
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: sysroot
-          key: sysroot-${{ matrix.target-os }}-${{ hashFiles('./.github/scripts/gen-bsd-sysroot.sh') }}
+          key: sysroot-${{ matrix.target-os }}-${{ matrix.arch }}-${{ hashFiles('./.github/scripts/gen-bsd-sysroot.sh') }}
 
       - name: 'Create sysroot'
         id: create-sysroot
-        run: bash .github/scripts/gen-bsd-sysroot.sh '${{ matrix.target-os }}' sysroot
+        run: >
+          bash .github/scripts/gen-bsd-sysroot.sh
+          '${{ matrix.target-os }}' sysroot '${{ matrix.arch }}'
         if: steps.get-cached-sysroot.outputs.cache-hit != 'true'
 
       - name: 'Prepare the cross compiler'
@@ -118,7 +138,7 @@ jobs:
         run: >
           bash .github/scripts/gen-bsd-crosstool.sh
           '${{ matrix.target-os }}' '${{ matrix.target-triple }}'
-          "$PWD/sysroot" "$PWD/cross-bin"
+          "$PWD/sysroot" "$PWD/cross-bin" '${{ matrix.llvm-suffix }}'
 
       - name: 'Configure'
         run: >
@@ -142,6 +162,7 @@ jobs:
           CXX=${{ matrix.target-triple }}-clang++
           BUILD_CC=clang
           BUILD_CXX=clang++
+          ${{ matrix.extra-configure }}
           ${{ inputs.extra-conf-options }} ${{ inputs.configure-arguments }} || (
           echo "Dumping config.log:" &&
           cat config.log &&
@@ -151,6 +172,53 @@ jobs:
         id: build
         uses: ./.github/actions/do-build
         with:
-          make-target: 'images ${{ inputs.make-arguments }}'
+          make-target: "${{ matrix.target-os == 'netbsd' && 'product-bundles test-bundles' || 'images' }} ${{ inputs.make-arguments }}"
           platform: ${{ matrix.conf-name }}
         if: inputs.dry-run == false
+
+      # NetBSD 10's run-time linker refuses a shared object that does not have
+      # exactly two PT_LOAD segments, and then reports the refusal as the file
+      # being missing -- so a build that loses -Wl,-z,noseparate-code comes
+      # back as "Shared object libjli.so not found" from a directory holding
+      # libjli.so, which is a day of looking in the wrong place.  Count them
+      # here, where the answer is unambiguous.
+      - name: 'Check the load segments NetBSD will accept'
+        run: |
+          seen=0
+          bad=0
+          for f in $(find build -name '*.so' -path '*/images/*'); do
+            seen=$((seen + 1))
+            n=$(readelf -l "$f" | grep -c '^  LOAD')
+            if [ "$n" -gt 2 ]; then
+              echo "$f: $n PT_LOAD"
+              bad=$((bad + 1))
+            fi
+          done
+          # A check that looks at nothing passes for the wrong reason.  A
+          # headless product image holds 34 shared objects, so twenty is
+          # well clear of a real image and nowhere near an empty search.
+          if [ "$seen" -lt 20 ]; then
+            echo "only $seen shared objects found under build/*/images;"
+            echo "this check is not looking where the libraries are."
+            exit 1
+          fi
+          if [ "$bad" -gt 0 ]; then
+            echo "$bad of $seen libraries have more than two PT_LOAD segments;"
+            echo "NetBSD 10 reports every one of them as not found."
+            exit 1
+          fi
+          echo "$seen shared objects, all with at most two PT_LOAD segments"
+        if: inputs.dry-run == false && matrix.target-os == 'netbsd'
+
+      # The bundles are what a machine running the OS picks up to test with:
+      # this runner cannot execute a line of what it just built.  Only NetBSD
+      # makes them, because only NetBSD is tested here -- and because the
+      # jtreg native code does not compile warning-clean on OpenBSD at all:
+      # 589 of its files print a jlong with %ld, which is right everywhere
+      # int64_t is long and wrong on the one BSD where it is long long.
+      # That is 1,235 diagnostics in the test suite, not a port defect.
+      - name: 'Upload bundles'
+        uses: ./.github/actions/upload-bundles
+        with:
+          platform: ${{ matrix.conf-name }}
+        if: inputs.dry-run == false && matrix.target-os == 'netbsd'

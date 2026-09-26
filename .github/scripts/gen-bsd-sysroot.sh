@@ -28,13 +28,24 @@
 # base system, the compiler support files and, where the X11 headers are
 # packaged apart from the rest, those too.
 #
-# Usage: gen-bsd-sysroot.sh <netbsd|freebsd|openbsd|dragonfly> <directory>
+# Usage: gen-bsd-sysroot.sh <netbsd|freebsd|openbsd|dragonfly> <directory> [arch]
+#
+# arch is spelled the way the JDK spells it -- x86_64, aarch64, powerpc64,
+# i386, sparc64 -- and each case below translates that into whatever the
+# operating system calls the same machine on its own mirror.  They disagree
+# with each other and, in OpenBSD's case, with themselves.
 
 set -eu
 
 os="$1"
 sysroot="$2"
+arch="${3:-x86_64}"
 mkdir -p "$sysroot"
+
+unsupported() {
+  echo "gen-bsd-sysroot.sh: $os has no $arch sysroot here" >&2
+  exit 1
+}
 
 # --max-time so that a mirror that accepts the connection and then stops
 # sending fails the job rather than sitting there until the six hour
@@ -55,16 +66,68 @@ case "$os" in
   netbsd)
     # comp holds the headers and the static libraries.  The X11 sets are not
     # fetched: the build is headless, see below.
-    base=https://cdn.netbsd.org/pub/NetBSD/NetBSD-11.0/amd64/binary/sets
-    for set in base comp; do
-      fetch "$set.tar.xz" "$base/$set.tar.xz"
-      extract "$set.tar.xz"
+    #
+    # Build against the released version, not the newest.  NetBSD 11's
+    # <pthread.h> resolves pthread_attr_destroy to __libc_thr_attr_destroy,
+    # a symbol NetBSD 10 does not export, so a JDK built against 11 dies on
+    # 10 the moment the launcher dlopens libjvm.so:
+    #
+    #   Undefined PLT symbol "__libc_thr_attr_destroy" (symnum = 21)
+    #
+    # 10 is also as far back as this source builds -- a 9.4 sysroot stops in
+    # os_posix.cpp, where PTHREAD_STACK_MIN is undeclared until 10 -- and it
+    # is the version vmactions offers, so it is what gets tested.
+    netbsd_release=10.1
+    # NetBSD names a port after the board family where the CPU is not the
+    # whole story, so aarch64 lives under evbarm-aarch64.  The sets are xz
+    # everywhere except i386, which 10.1 still ships gzipped.
+    # pkgsrc files its binary packages by MACHINE_ARCH, which differs from
+    # the port name wherever the port is a board family.
+    case "$arch" in
+      x86_64)  port=amd64 ;           ext=tar.xz ; pkgarch=x86_64 ;;
+      aarch64) port=evbarm-aarch64 ;  ext=tar.xz ; pkgarch=aarch64 ;;
+      sparc64) port=sparc64 ;         ext=tar.xz ; pkgarch=sparc64 ;;
+      i386)    port=i386 ;            ext=tgz ;    pkgarch=i386 ;;
+      armv7)   port=evbarm-earmv7hf ; ext=tgz ;    pkgarch=earmv7hf ;;
+      # There is no riscv-riscv64 release before 11.0, so the 10.1 pin
+      # above has nothing to hold on to here.
+      riscv64) port=riscv-riscv64 ;   ext=tgz ;    pkgarch=riscv64
+               netbsd_release=11.0 ;;
+      *) unsupported ;;
+    esac
+    base=https://cdn.netbsd.org/pub/NetBSD/NetBSD-$netbsd_release/$port/binary/sets
+    # NetBSD is the one BSD here that ships X11 as ordinary sets, so a
+    # headful build can be cross-compiled for it.  They cost about 20MB
+    # and a headless build simply does not look at them.
+    for set in base comp xbase xcomp; do
+      fetch "$set.$ext" "$base/$set.$ext"
+      extract "$set.$ext"
     done
+    # The machines with no HotSpot port on BSD are built as Zero, which
+    # calls through libffi.  NetBSD keeps it in pkgsrc rather than base,
+    # and a binary package unpacks relative to /usr/pkg.
+    case "$arch" in
+      i386|sparc64|armv7|riscv64)
+        pkgs=https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$pkgarch/$netbsd_release/All
+        fetch libffi.tgz "$pkgs/libffi-3.5.2.tgz"
+        sudo mkdir -p "$sysroot/usr/pkg"
+        echo "extracting libffi.tgz into usr/pkg"
+        sudo tar xf libffi.tgz -C "$sysroot/usr/pkg" include lib
+        ;;
+    esac
     ;;
 
   freebsd)
     # FreeBSD puts the whole base system in one base.txz.
-    base=https://download.freebsd.org/releases/amd64/15.1-RELEASE
+    # amd64 is the one release directory that is not <target>/<target_arch>.
+    case "$arch" in
+      x86_64)    relpath=amd64 ;;
+      aarch64)   relpath=arm64/aarch64 ;;
+      powerpc64) relpath=powerpc/powerpc64 ;;
+      powerpc64le) relpath=powerpc/powerpc64le ;;
+      *) unsupported ;;
+    esac
+    base=https://download.freebsd.org/releases/$relpath/15.1-RELEASE
     fetch base.txz "$base/base.txz"
     extract base.txz
     ;;
@@ -72,7 +135,19 @@ case "$os" in
   openbsd)
     # OpenBSD numbers its sets after the release: base79.tgz for 7.9, with
     # comp79 carrying the headers.
-    base=https://cdn.openbsd.org/pub/OpenBSD/7.9/amd64
+    # The same mirror spells this machine two ways: the release sets are
+    # under arm64/ and the packages under aarch64/.
+    case "$arch" in
+      x86_64)  setdir=amd64 ;   pkgdir=amd64 ;;
+      aarch64) setdir=arm64 ;   pkgdir=aarch64 ;;
+      sparc64) setdir=sparc64 ; pkgdir=sparc64 ;;
+      i386)    setdir=i386 ;    pkgdir=i386 ;;
+      powerpc64) setdir=powerpc64 ; pkgdir=powerpc64 ;;
+      armv7)   setdir=armv7 ;   pkgdir=arm ;;
+      riscv64) setdir=riscv64 ; pkgdir=riscv64 ;;
+      *) unsupported ;;
+    esac
+    base=https://cdn.openbsd.org/pub/OpenBSD/7.9/$setdir
     for set in base79 comp79; do
       fetch "$set.tgz" "$base/$set.tgz"
       extract "$set.tgz"
@@ -83,10 +158,18 @@ case "$os" in
     # A package's paths are relative to /usr/local, so it needs its own
     # destination rather than the sysroot root.
     fetch libiconv.tgz \
-        https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/amd64/libiconv-1.19.tgz
+        https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/$pkgdir/libiconv-1.19.tgz
     sudo mkdir -p "$sysroot/usr/local"
     echo "extracting libiconv.tgz into usr/local"
     sudo tar xf libiconv.tgz -C "$sysroot/usr/local"
+    # The Zero machines call through libffi, which is a package here too.
+    case "$arch" in i386|sparc64|armv7|riscv64)
+      fetch libffi.tgz \
+          https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/$pkgdir/libffi-3.5.2p0.tgz
+      echo "extracting libffi.tgz into usr/local"
+      sudo tar xf libffi.tgz -C "$sysroot/usr/local" include lib
+      ;;
+    esac
     ;;
 
   dragonfly)
@@ -94,6 +177,8 @@ case "$os" in
     # disk image and nothing else.  The ISO is cd9660 and libarchive reads
     # that directly, so the headers and libraries come straight out of it
     # without a loop mount.
+    # DragonFly is x86_64 only.
+    [ "$arch" = x86_64 ] || unsupported
     base=https://mirror-master.dragonflybsd.org/iso-images
     fetch dfly.iso.bz2 "$base/dfly-x86_64-6.4.2_REL.iso.bz2"
     bunzip2 dfly.iso.bz2
@@ -114,10 +199,11 @@ esac
 sudo chown -R "$USER" "$sysroot"
 
 
-# No BSD carries X11 in its base system either -- NetBSD and OpenBSD ship it
-# as separate sets, the others leave it to ports -- so the build is configured
-# headless and none of it is fetched.  What that gives up is the X11 half of
-# java.desktop; everything else, hotspot included, still gets compiled.
+# No BSD carries X11 in its base system: NetBSD and OpenBSD ship it as
+# separate sets and the others leave it to ports.  NetBSD's are fetched
+# above, so a headful build is possible there; everywhere else the build is
+# configured headless, which gives up the X11 half of java.desktop and
+# nothing else -- hotspot included, all of it still gets compiled.
 #
 # Neither cups nor fontconfig is part of any BSD base system, and the JDK
 # needs their headers alone: both are opened with dlopen at run time.  The
@@ -161,7 +247,8 @@ done
 #     '__cxa_new_handler'; recompile with -fPIC
 #
 # because the archive is not built PIC.  Make the symlinks lld expects.
-for dir in "$sysroot"/usr/lib "$sysroot"/lib; do
+for dir in "$sysroot"/usr/lib "$sysroot"/lib "$sysroot"/usr/pkg/lib \
+           "$sysroot"/usr/local/lib "$sysroot"/usr/X11R7/lib; do
   [ -d "$dir" ] || continue
   for so in "$dir"/lib*.so.*; do
     [ -e "$so" ] || continue
