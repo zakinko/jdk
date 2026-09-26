@@ -219,6 +219,7 @@ $(eval $(call SetupJdkLibrary, BUILD_LIBJVM, \
     DISABLED_WARNINGS_gcc_xGlobals_ppc.cpp := unused-const-variable, \
     DISABLED_WARNINGS_clang := $(DISABLED_WARNINGS_clang), \
     DISABLED_WARNINGS_clang_arguments.cpp := missing-field-initializers, \
+    DISABLED_WARNINGS_clang_bytecodeInterpreter.cpp := unused-label, \
     DISABLED_WARNINGS_clang_codeBuffer.cpp := tautological-undefined-compare, \
     DISABLED_WARNINGS_clang_directivesParser.cpp := missing-field-initializers, \
     DISABLED_WARNINGS_clang_g1ParScanThreadState.cpp := delete-abstract-non-virtual-dtor, \
