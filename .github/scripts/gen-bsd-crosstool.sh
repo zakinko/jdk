@@ -151,6 +151,15 @@ W
         -isystem $cxxdir/backward -isystem $gccdir"
     rt_extra="--rtlib=libgcc"
     link_extra="-lgcc"
+    # libffi, for Zero, is a package and unpacks under usr/local; see
+    # OpenBSD below for the -rpath-link.
+    common_extra="-L$sysroot/usr/local/lib -Wl,-rpath-link=$sysroot/usr/local/lib"
+    ;;
+  freebsd)
+    cxx_extra=""
+    rt_extra=""
+    link_extra=""
+    common_extra="-L$sysroot/usr/local/lib -Wl,-rpath-link=$sysroot/usr/local/lib"
     ;;
   openbsd)
     # iconv is a package there rather than part of the C library, and a
