@@ -69,9 +69,18 @@ extract() {
 # itself an archive -- tar.zst on FreeBSD 15, txz on DragonFly -- of
 # absolute paths under /usr/local plus pkg's own +MANIFEST files, and
 # bsdtar tells the compressions apart by itself.
+#
+# Not every machine has a repository -- FreeBSD 15 builds packages for
+# amd64 and aarch64 only -- and a machine without one is not an error
+# here: gen-bsd-crosstool.sh builds libffi from source for whatever
+# sysroot has none.
 fetch_pkg() {
   local repo="$1" name="$2" path
   if [ ! -f packagesite.yaml ]; then
+    if ! curl -fsSI --retry 3 --max-time 60 "$repo/packagesite.pkg" > /dev/null; then
+      echo "no package repository at $repo; $name is left to be built"
+      return 0
+    fi
     fetch packagesite.pkg "$repo/packagesite.pkg"
     bsdtar -xf packagesite.pkg packagesite.yaml
   fi
@@ -82,8 +91,20 @@ fetch_pkg() {
     exit 1
   fi
   fetch "$name.pkg" "$repo/$path"
+  # The paths inside are absolute, /usr/local/..., and bsdtar takes the
+  # leading slash off them unless told otherwise.
   echo "extracting $name.pkg"
-  sudo bsdtar -xf "$name.pkg" -C "$sysroot" --exclude '+*' usr/local
+  sudo bsdtar -xf "$name.pkg" -C "$sysroot" --exclude '+*'
+}
+
+# The index of a package directory on the NetBSD and OpenBSD mirrors,
+# searched for the newest <name>-<version>.tgz.  Empty if the directory
+# or the package is not there.  Anchor on href=, or the pattern matches
+# the middle of other package names.  The index is a redirect, hence -L.
+newest_in_index() {
+  { curl -fsSL --retry 3 --max-time 300 "$1/" || true; } |
+      grep -oE "href=\"$2-[0-9][^\"]*[.]tgz\"" |
+      sed 's/^href="//; s/"$//' | sort -uV | tail -1
 }
 
 case "$os" in
@@ -117,6 +138,17 @@ case "$os" in
       # above has nothing to hold on to here.
       riscv64) port=riscv-riscv64 ;   ext=tgz ;    pkgarch=riscv64
                netbsd_release=11.0 ;;
+      # macppc and evbppc are the same MACHINE_ARCH, powerpc, and the same
+      # userland; macppc is the one pkgsrc also builds for.
+      powerpc) port=macppc ;          ext=tgz ;    pkgarch=powerpc ;;
+      armv6)   port=evbarm-earmv6hf ; ext=tgz ;    pkgarch=earmv6hf ;;
+      # evbmips-mips64eb and -mips64el keep N32 in /usr/lib, a 32-bit
+      # userland on a 64-bit CPU that the JDK has no notion of.  The
+      # mipsn64 ports are the same machines with an N64 userland, which
+      # is what clang's mips64 triples compile for.  pkgsrc builds for
+      # neither, so libffi is built from source for them.
+      mips64)  port=evbmips-mipsn64eb ; ext=tgz ;  pkgarch=mipsn64eb ;;
+      mips64el) port=evbmips-mipsn64el ; ext=tgz ; pkgarch=mipsn64el ;;
       *) unsupported ;;
     esac
     base=https://cdn.netbsd.org/pub/NetBSD/NetBSD-$netbsd_release/$port/binary/sets
@@ -132,27 +164,22 @@ case "$os" in
     # and a binary package unpacks relative to /usr/pkg.  The HotSpot
     # machines get it too: a Zero build of x86_64 or aarch64 shares their
     # cached sysroot, and a HotSpot build does not look at it.
-    case "$arch" in
-      *)
-        pkgs=https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$pkgarch/$netbsd_release/All
-        # Take the name from the index rather than fixing a version: the
-        # mirrors move to a new quarterly one machine at a time, and on
-        # 2026-09-27 i386 and x86_64 had libffi-3.8.0 while the rest still
-        # had 3.5.2.  Anchor on href=, or the pattern matches the middle of
-        # other package names.  The index is a redirect, hence -L.
-        ffi=$(curl -fsSL --retry 3 --max-time 300 "$pkgs/" |
-            grep -oE 'href="libffi-[0-9][^"]*[.]tgz"' |
-            sed 's/^href="//; s/"$//' | sort -uV | tail -1)
-        if [ -z "$ffi" ]; then
-          echo "no libffi under $pkgs" >&2
-          exit 1
-        fi
-        fetch libffi.tgz "$pkgs/$ffi"
-        sudo mkdir -p "$sysroot/usr/pkg"
-        echo "extracting libffi.tgz into usr/pkg"
-        sudo tar xf libffi.tgz -C "$sysroot/usr/pkg" include lib
-        ;;
-    esac
+    #
+    # Take the name from the index rather than fixing a version: the
+    # mirrors move to a new quarterly one machine at a time, and on
+    # 2026-09-27 i386 and x86_64 had libffi-3.8.0 while the rest still
+    # had 3.5.2.  A machine pkgsrc does not build for gets its libffi
+    # from gen-bsd-crosstool.sh instead, into the same usr/pkg.
+    sudo mkdir -p "$sysroot/usr/pkg/include" "$sysroot/usr/pkg/lib"
+    pkgs=https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$pkgarch/$netbsd_release/All
+    ffi=$(newest_in_index "$pkgs" libffi)
+    if [ -n "$ffi" ]; then
+      fetch libffi.tgz "$pkgs/$ffi"
+      echo "extracting libffi.tgz into usr/pkg"
+      sudo tar xf libffi.tgz -C "$sysroot/usr/pkg" include lib
+    else
+      echo "no libffi under $pkgs; it is left to be built"
+    fi
     ;;
 
   freebsd)
@@ -163,7 +190,6 @@ case "$os" in
       aarch64)   relpath=arm64/aarch64 ;;
       powerpc64) relpath=powerpc/powerpc64 ;;
       powerpc64le) relpath=powerpc/powerpc64le ;;
-      armv7)     relpath=arm/armv7 ;;
       riscv64)   relpath=riscv/riscv64 ;;
       *) unsupported ;;
     esac
@@ -172,7 +198,8 @@ case "$os" in
     extract base.txz
     # Zero calls through libffi, which FreeBSD leaves to its packages.
     # The package repository is named after the machine alone, and amd64
-    # is again the odd one out.
+    # is again the odd one out.  Only amd64 and aarch64 have one for 15;
+    # the others get libffi built from source by gen-bsd-crosstool.sh.
     case "$arch" in
       x86_64) pkgarch=amd64 ;;
       *)      pkgarch=$arch ;;
@@ -193,6 +220,11 @@ case "$os" in
       powerpc64) setdir=powerpc64 ; pkgdir=powerpc64 ;;
       armv7)   setdir=armv7 ;   pkgdir=arm ;;
       riscv64) setdir=riscv64 ; pkgdir=riscv64 ;;
+      powerpc) setdir=macppc ;  pkgdir=powerpc ;;
+      mips64)  setdir=octeon ;  pkgdir=mips64 ;;
+      # 7.9 has no packages for loongson at all; libiconv and libffi are
+      # built from source for it by gen-bsd-crosstool.sh.
+      mips64el) setdir=loongson ; pkgdir=mips64el ;;
       *) unsupported ;;
     esac
     base=https://cdn.openbsd.org/pub/OpenBSD/7.9/$setdir
@@ -205,28 +237,30 @@ case "$os" in
     # a package, which unpacks under usr/local.
     # A package's paths are relative to /usr/local, so it needs its own
     # destination rather than the sysroot root.
-    fetch libiconv.tgz \
-        https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/$pkgdir/libiconv-1.19.tgz
-    sudo mkdir -p "$sysroot/usr/local"
-    echo "extracting libiconv.tgz into usr/local"
-    sudo tar xf libiconv.tgz -C "$sysroot/usr/local"
+    pkgs=https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/$pkgdir
+    sudo mkdir -p "$sysroot/usr/local/include" "$sysroot/usr/local/lib"
+    iconv=$(newest_in_index "$pkgs" libiconv)
+    if [ -n "$iconv" ]; then
+      fetch libiconv.tgz "$pkgs/$iconv"
+      echo "extracting libiconv.tgz into usr/local"
+      sudo tar xf libiconv.tgz -C "$sysroot/usr/local"
+    else
+      echo "no libiconv under $pkgs; it is left to be built"
+    fi
     # Zero calls through libffi, which is a package here too.  It is
     # fetched for every machine, the HotSpot ones included: a HotSpot and
     # a Zero build of the same machine share one cached sysroot, and a
     # build that is not Zero does not look at it.  The name comes from the
     # index, as on NetBSD, since the version is not the same on every
     # machine.
-    pkgs=https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/$pkgdir
-    ffi=$(curl -fsSL --retry 3 --max-time 300 "$pkgs/" |
-        grep -oE 'href="libffi-[0-9][^"]*[.]tgz"' |
-        sed 's/^href="//; s/"$//' | sort -uV | tail -1)
-    if [ -z "$ffi" ]; then
-      echo "no libffi under $pkgs" >&2
-      exit 1
+    ffi=$(newest_in_index "$pkgs" libffi)
+    if [ -n "$ffi" ]; then
+      fetch libffi.tgz "$pkgs/$ffi"
+      echo "extracting libffi.tgz into usr/local"
+      sudo tar xf libffi.tgz -C "$sysroot/usr/local" include lib
+    else
+      echo "no libffi under $pkgs; it is left to be built"
     fi
-    fetch libffi.tgz "$pkgs/$ffi"
-    echo "extracting libffi.tgz into usr/local"
-    sudo tar xf libffi.tgz -C "$sysroot/usr/local" include lib
     ;;
 
   dragonfly)
@@ -245,6 +279,9 @@ case "$os" in
     # of the libstdc++ headers on DragonFly.
     bsdtar -xf dfly.iso -C "$sysroot" usr/include usr/lib usr/libdata lib
     rm -f dfly.iso
+    # libffi, for Zero, comes from dports, a pkg(8) repository like
+    # FreeBSD's.
+    fetch_pkg https://mirror-master.dragonflybsd.org/dports/dragonfly:6.4:x86:64/LATEST libffi
     ;;
 
   *)
