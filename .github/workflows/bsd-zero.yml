@@ -57,3 +57,67 @@ jobs:
           curl -fsSI --max-time 60 https://mirror-master.dragonflybsd.org/dports/dragonfly:6.4:x86:64/LATEST/packagesite.pkg | head -3 || true
           l https://mirror-master.dragonflybsd.org/dports/dragonfly:6.4:x86:64/LATEST/All/ libffi
           apt-cache search binutils- | grep -E 'powerpc|mips|arm|aarch64' || true
+
+  zero:
+    name: zero
+    uses: ./.github/workflows/build-bsd.yml
+    with:
+      extra-conf-options: '--with-jvm-variants=zero'
+      targets: >-
+        {"include":[
+          {"target-os":"netbsd",
+           "arch":"x86_64",
+           "target-triple":"x86_64-unknown-netbsd",
+           "conf-name":"bsd-x86_64-netbsd-zero",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
+          {"target-os":"netbsd",
+           "arch":"aarch64",
+           "target-triple":"aarch64-unknown-netbsd",
+           "conf-name":"bsd-aarch64-netbsd-zero",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
+          {"target-os":"freebsd",
+           "arch":"x86_64",
+           "target-triple":"x86_64-unknown-freebsd15.1",
+           "conf-name":"bsd-x86_64-freebsd-zero",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"freebsd",
+           "arch":"aarch64",
+           "target-triple":"aarch64-unknown-freebsd15.1",
+           "conf-name":"bsd-aarch64-freebsd-zero",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"freebsd",
+           "arch":"riscv64",
+           "target-triple":"riscv64-unknown-freebsd15.1",
+           "conf-name":"bsd-riscv64-freebsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"freebsd",
+           "arch":"armv7",
+           "target-triple":"armv7-unknown-freebsd15.1-gnueabihf",
+           "conf-name":"bsd-arm-freebsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"freebsd",
+           "arch":"powerpc64",
+           "target-triple":"powerpc64-unknown-freebsd15.1",
+           "conf-name":"bsd-ppc64-freebsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"freebsd",
+           "arch":"powerpc64le",
+           "target-triple":"powerpc64le-unknown-freebsd15.1",
+           "conf-name":"bsd-ppc64le-freebsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"openbsd",
+           "arch":"x86_64",
+           "target-triple":"x86_64-unknown-openbsd7.9",
+           "conf-name":"bsd-x86_64-openbsd-zero",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"openbsd",
+           "arch":"aarch64",
+           "target-triple":"aarch64-unknown-openbsd7.9",
+           "conf-name":"bsd-aarch64-openbsd-zero",
+           "llvm-suffix":"-20",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"openbsd",
+           "arch":"powerpc64",
+           "target-triple":"powerpc64-unknown-openbsd7.9",
+           "conf-name":"bsd-ppc64-openbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"}]}
