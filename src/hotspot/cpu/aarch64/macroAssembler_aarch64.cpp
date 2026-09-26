@@ -4026,7 +4026,7 @@ bool MacroAssembler::ldst_can_merge(Register rt,
 
   int64_t cur_offset = adr.offset();
   int64_t prev_offset = prev_ldst->offset();
-  size_t diff = abs(cur_offset - prev_offset);
+  size_t diff = g_uabs(cur_offset - prev_offset);
   if (diff != prev_size_in_bytes) {
     return false;
   }
