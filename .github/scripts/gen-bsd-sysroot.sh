@@ -109,7 +109,19 @@ case "$os" in
     case "$arch" in
       i386|sparc64|armv7|riscv64)
         pkgs=https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$pkgarch/$netbsd_release/All
-        fetch libffi.tgz "$pkgs/libffi-3.5.2.tgz"
+        # Take the name from the index rather than fixing a version: the
+        # mirrors move to a new quarterly one machine at a time, and on
+        # 2026-09-27 i386 and x86_64 had libffi-3.8.0 while the rest still
+        # had 3.5.2.  Anchor on href=, or the pattern matches the middle of
+        # other package names.  The index is a redirect, hence -L.
+        ffi=$(curl -fsSL --retry 3 --max-time 300 "$pkgs/" |
+            grep -oE 'href="libffi-[0-9][^"]*[.]tgz"' |
+            sed 's/^href="//; s/"$//' | sort -uV | tail -1)
+        if [ -z "$ffi" ]; then
+          echo "no libffi under $pkgs" >&2
+          exit 1
+        fi
+        fetch libffi.tgz "$pkgs/$ffi"
         sudo mkdir -p "$sysroot/usr/pkg"
         echo "extracting libffi.tgz into usr/pkg"
         sudo tar xf libffi.tgz -C "$sysroot/usr/pkg" include lib
