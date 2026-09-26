@@ -152,7 +152,7 @@ Java_sun_nio_fs_BsdNativeDispatcher_fsstatEntry(JNIEnv* env, jclass this,
     char* fstype;
     char* options;
     int32_t fsid_val[2];
-    long dev;
+    jlong dev;
 
     if (iter == NULL || iter->pos >= iter->nentries)
        return -1;
@@ -204,7 +204,7 @@ Java_sun_nio_fs_BsdNativeDispatcher_fsstatEntry(JNIEnv* env, jclass this,
     (*env)->SetByteArrayRegion(env, bytes, 0, len, (jbyte*)options);
     (*env)->SetObjectField(env, entry, entry_options, bytes);
 
-    dev = (((long)fsid_val[1]) << 32) | (long)fsid_val[0];
+    dev = (((jlong)fsid_val[1]) << 32) | (jlong)fsid_val[0];
     (*env)->SetLongField(env, entry, entry_dev, long_to_jlong(dev));
 
     return 0;
