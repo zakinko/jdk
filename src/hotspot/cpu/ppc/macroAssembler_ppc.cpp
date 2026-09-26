@@ -51,6 +51,9 @@
 #include "runtime/vm_version.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/powerOfTwo.hpp"
+#ifdef _ALLBSD_SOURCE
+#include "ucontext_bsd_ppc.hpp"
+#endif
 
 #ifdef PRODUCT
 #define BLOCK_COMMENT(str) // nothing
@@ -1446,6 +1449,20 @@ void MacroAssembler::call_VM_leaf(address entry_point, Register arg_1, Register 
   call_VM_leaf(entry_point);
 }
 
+#if defined(LINUX)
+// General purpose register n as saved in the ucontext handed to a signal
+// handler: Linux reaches it through a pointer in the mcontext.
+static intptr_t ucontext_get_gpr(const ucontext_t* uc, int n) {
+  return (intptr_t)uc->uc_mcontext.regs->gpr[n];
+}
+#elif defined(_ALLBSD_SOURCE)
+// The BSDs keep the registers in the context itself, each where its
+// os_cpu header says.
+static intptr_t ucontext_get_gpr(const ucontext_t* uc, int n) {
+  return (intptr_t)uc->context_gpr(n);
+}
+#endif
+
 // Check whether instruction is a read access to the polling page
 // which was emitted by load_from_polling_page(..).
 bool MacroAssembler::is_load_from_polling_page(int instruction, void* ucontext,
@@ -1468,18 +1485,18 @@ bool MacroAssembler::is_load_from_polling_page(int instruction, void* ucontext,
     return true; // No ucontext given. Can't check value of ra. Assume true.
   }
 
-#ifdef LINUX
+#if defined(LINUX) || defined(_ALLBSD_SOURCE)
   // Ucontext given. Check that register ra contains the address of
   // the safepoing polling page.
   ucontext_t* uc = (ucontext_t*) ucontext;
   // Set polling address.
-  address addr = (address)uc->uc_mcontext.regs->gpr[ra] + (ssize_t)ds;
+  address addr = (address)ucontext_get_gpr(uc, ra) + (ssize_t)ds;
   if (polling_address_ptr != nullptr) {
     *polling_address_ptr = addr;
   }
   return SafepointMechanism::is_poll_address(addr);
 #else
-  // Not on Linux, ucontext must be null.
+  // Nowhere else to read it from, so ucontext must be null.
   ShouldNotReachHere();
   return false;
 #endif
@@ -1527,7 +1544,7 @@ void MacroAssembler::bang_stack_with_offset(int offset) {
 // or stdux  R1_SP, Rx, R1_SP    (see push_frame(), resize_frame())
 // return the banged address. Otherwise, return 0.
 address MacroAssembler::get_stack_bang_address(int instruction, void *ucontext) {
-#ifdef LINUX
+#if defined(LINUX) || defined(_ALLBSD_SOURCE)
   ucontext_t* uc = (ucontext_t*) ucontext;
   int rs = inv_rs_field(instruction);
   int ra = inv_ra_field(instruction);
@@ -1536,17 +1553,17 @@ address MacroAssembler::get_stack_bang_address(int instruction, void *ucontext) 
       || (is_stdu(instruction) && rs == 1)) {
     int ds = inv_ds_field(instruction);
     // return banged address
-    return ds+(address)uc->uc_mcontext.regs->gpr[ra];
+    return ds+(address)ucontext_get_gpr(uc, ra);
   } else if (is_stdux(instruction) && rs == 1) {
     int rb = inv_rb_field(instruction);
-    address sp = (address)uc->uc_mcontext.regs->gpr[1];
-    long rb_val = (long)uc->uc_mcontext.regs->gpr[rb];
+    address sp = (address)ucontext_get_gpr(uc, 1);
+    long rb_val = (long)ucontext_get_gpr(uc, rb);
     return ra != 1 || rb_val >= 0 ? nullptr         // not a stack bang
                                   : sp + rb_val; // banged address
   }
   return nullptr; // not a stack bang
 #else
-  // workaround not needed on !LINUX :-)
+  // No ucontext to read the registers out of.
   ShouldNotCallThis();
   return nullptr;
 #endif
