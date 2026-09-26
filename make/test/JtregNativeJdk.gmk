@@ -57,6 +57,9 @@ ifeq ($(OPENJDK_TARGET_OS_ENV), bsd.openbsd)
   # named here; see make/modules/java.base/lib/CoreLibraries.gmk.
   BUILD_JDK_JTREG_EXECUTABLES_LIBS_exeJliLaunchTest := $(LIBZ_LIBS) $(LIBPTHREAD)
   BUILD_JDK_JTREG_EXECUTABLES_LIBS_exeJniInvocationTest := $(LIBZ_LIBS) $(LIBPTHREAD)
+  # OpenBSD removed mincore(2), which libDirectIO asks the page cache with,
+  # and DirectIOTest runs only on Linux and AIX anyway.
+  BUILD_JDK_JTREG_EXCLUDE += libDirectIO.c
 endif
 BUILD_JDK_JTREG_EXECUTABLES_JDK_LIBS_exeCallerAccessTest := java.base:libjvm
 BUILD_JDK_JTREG_EXECUTABLES_JDK_LIBS_exeNullCallerTest := java.base:libjvm

@@ -217,6 +217,26 @@ for tool in ar ranlib strip objcopy nm objdump; do
   chmod +x "$bindir/$triple-$tool"
 done
 
+# 32-bit arm C++ calls __cxa_end_cleanup from every cleanup landing pad,
+# and NetBSD's test launcher NullCallerTest stopped at it as undefined.
+# Say which library in the sysroot defines it, so the link can name that
+# one.  Informational only.
+case "$triple" in
+  armv7-*netbsd*)
+    echo "--- who defines __cxa_end_cleanup ---"
+    for f in "$sysroot"/usr/lib/libstdc++.* "$sysroot"/usr/lib/libsupc++.* \
+             "$sysroot"/usr/lib/libgcc* "$sysroot"/usr/lib/libunwind* \
+             "$sysroot"/usr/lib/libc++abi* "$sysroot"/usr/lib/libc.so*; do
+      [ -f "$f" ] || continue
+      if llvm-nm$llvm_suffix -g --defined-only "$f" 2>/dev/null |
+          grep -q ' __cxa_end_cleanup$'; then
+        echo "  defined in ${f#$sysroot}"
+      fi
+    done
+    echo "--- end ---"
+    ;;
+esac
+
 # Prove the wrapper links before configure spends ten minutes finding out.
 tmp=$(mktemp -d)
 printf 'int main(void){return 0;}\n' > "$tmp/probe.c"

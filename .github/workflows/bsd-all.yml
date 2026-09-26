@@ -2,9 +2,10 @@
 # Cross-build every BSD on every machine this tree can target, then run
 # tier1 on each BSD and machine a virtual machine can be booted for.
 #
-# x86_64 and aarch64 have HotSpot ports on the BSDs; i386, sparc64, armv7
-# and riscv64 do not, and are built as Zero, which calls through libffi
-# from the OS's packages.  DragonFly is x86_64 only.  NetBSD builds against
+# x86_64, aarch64 and 64-bit PowerPC (FreeBSD and OpenBSD, which use the
+# ELFv2 ABI there; NetBSD's is ELFv1) have HotSpot ports on the BSDs; i386,
+# sparc64, armv7 and riscv64 do not, and are built as Zero, which calls
+# through libffi from the OS's packages.  DragonFly is x86_64 only.  NetBSD builds against
 # 10.1 but for riscv64, whose first release is 11.0; the reasons are in
 # gen-bsd-sysroot.sh.  NetBSD is also built once with the desktop modules,
 # which pull in X11 and are otherwise left out.
@@ -21,13 +22,17 @@ on:
       - claude/eloquent-dirac-pfg00n
   workflow_dispatch:
 
-concurrency:
-  group: bsd-all-${{ github.ref }}
-  cancel-in-progress: true
-
+# No run-wide concurrency: a push would then cancel tier1, which takes
+# hours, every time a fix went in, and no run would ever finish one.  A
+# newer push cancels the builds of an older one, and each machine's tier1
+# is never cancelled once it starts; a newer one waits for it, and only the
+# newest waiting one runs.
 jobs:
   hotspot:
     name: hotspot
+    concurrency:
+      group: bsd-build-hotspot-${{ github.ref }}
+      cancel-in-progress: true
     uses: ./.github/workflows/build-bsd.yml
     with:
       targets: >-
@@ -53,10 +58,23 @@ jobs:
           {"target-os":"openbsd","arch":"aarch64",
            "target-triple":"aarch64-unknown-openbsd7.9",
            "conf-name":"bsd-aarch64-openbsd",
+           "llvm-suffix":"-19"},
+          {"target-os":"freebsd","arch":"powerpc64",
+           "target-triple":"powerpc64-unknown-freebsd15.1",
+           "conf-name":"bsd-powerpc64-freebsd"},
+          {"target-os":"freebsd","arch":"powerpc64le",
+           "target-triple":"powerpc64le-unknown-freebsd15.1",
+           "conf-name":"bsd-powerpc64le-freebsd"},
+          {"target-os":"openbsd","arch":"powerpc64",
+           "target-triple":"powerpc64-unknown-openbsd7.9",
+           "conf-name":"bsd-powerpc64-openbsd",
            "llvm-suffix":"-20"}]}
 
   zero:
     name: zero
+    concurrency:
+      group: bsd-build-zero-${{ github.ref }}
+      cancel-in-progress: true
     uses: ./.github/workflows/build-bsd.yml
     with:
       extra-conf-options: '--with-jvm-variants=zero'
@@ -98,6 +116,9 @@ jobs:
 
   headful:
     name: headful
+    concurrency:
+      group: bsd-build-headful-${{ github.ref }}
+      cancel-in-progress: true
     uses: ./.github/workflows/build-bsd.yml
     with:
       targets: >-
@@ -133,6 +154,9 @@ jobs:
     name: tier1
     needs: [jtreg, hotspot]
     if: ${{ !cancelled() && needs.jtreg.result == 'success' }}
+    concurrency:
+      group: bsd-tier1-${{ github.ref }}-${{ matrix.platform }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:

@@ -28,6 +28,7 @@
 
 #include "asm/assembler.hpp"
 #include "asm/register.hpp"
+#include "metaprogramming/enableIf.hpp"
 
 // Address is an abstraction used to represent a memory location
 // as used in assembler instructions.
@@ -1039,6 +1040,15 @@ class Assembler : public AbstractAssembler {
     return min <= x && x < maxplus1;
   }
 
+  // jlong is int64_t, which OpenBSD spells long long, so a long there --
+  // an intptr_t, an intx, a pointer difference -- is no nearer the jlong
+  // overload than the int one and the call is ambiguous.  Offer long
+  // wherever it is a type of its own.
+  template <typename T, ENABLE_IF(std::is_same<T, long>::value && !std::is_same<long, jlong>::value)>
+  static bool is_simm(T x, unsigned int nbits) {
+    return is_simm((jlong)x, nbits);
+  }
+
   // Test if x is within unsigned immediate range for nbits.
   static bool is_uimm(int x, unsigned int nbits) {
     assert(0 < nbits && nbits < 32, "out of bounds");
@@ -1050,6 +1060,12 @@ class Assembler : public AbstractAssembler {
     assert(0 < nbits && nbits < 64, "out of bounds");
     const julong maxplus1 = (((julong)1) << nbits);
     return (julong)x < maxplus1;
+  }
+
+  // See is_simm.
+  template <typename T, ENABLE_IF(std::is_same<T, long>::value && !std::is_same<long, jlong>::value)>
+  static bool is_uimm(T x, unsigned int nbits) {
+    return is_uimm((jlong)x, nbits);
   }
 
   // Test if x has exactly one consecutive range of one bits (e.g. 00111000)

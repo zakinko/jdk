@@ -330,6 +330,12 @@ static char cpu_arch[] = "arm";
 static char cpu_arch[] = "aarch64";
 #elif defined(PPC32)
 static char cpu_arch[] = "ppc";
+#elif defined(PPC64)
+#ifdef VM_LITTLE_ENDIAN
+static char cpu_arch[] = "ppc64le";
+#else
+static char cpu_arch[] = "ppc64";
+#endif
 #else
   #error Add appropriate cpu_arch setting
 #endif
@@ -1444,7 +1450,11 @@ void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
     {EM_IA_64,       EM_IA_64,   ELFCLASS64, ELFDATA2LSB, (char*)"IA 64"},
     {EM_X86_64,      EM_X86_64,  ELFCLASS64, ELFDATA2LSB, (char*)"AMD 64"},
     {EM_PPC,         EM_PPC,     ELFCLASS32, ELFDATA2MSB, (char*)"Power PC 32"},
+#if defined(VM_LITTLE_ENDIAN)
+    {EM_PPC64,       EM_PPC64,   ELFCLASS64, ELFDATA2LSB, (char*)"Power PC 64 LE"},
+#else
     {EM_PPC64,       EM_PPC64,   ELFCLASS64, ELFDATA2MSB, (char*)"Power PC 64"},
+#endif
     {EM_ARM,         EM_ARM,     ELFCLASS32,   ELFDATA2LSB, (char*)"ARM"},
     {EM_AARCH64,     EM_AARCH64, ELFCLASS64,   ELFDATA2LSB, (char*)"AARCH64"},
     {EM_SPARC,       EM_SPARC,   ELFCLASS32, ELFDATA2MSB, (char*)"Sparc 32"},

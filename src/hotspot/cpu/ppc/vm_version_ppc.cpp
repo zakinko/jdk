@@ -39,7 +39,11 @@
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/powerOfTwo.hpp"
 
+// Nothing here names anything from <sys/sysinfo.h>, and the BSDs do not
+// carry the header at all, so ask for it only where it exists.
+#if defined(LINUX) || defined(_AIX)
 #include <sys/sysinfo.h>
+#endif
 #if defined(_AIX)
 #include "os_aix.hpp"
 #include <libperfstat.h>
@@ -574,7 +578,7 @@ void VM_Version::config_dscr() {
   // Apply the configuration if needed.
   _dscr_val = (*get_dscr)();
   if (Verbose) {
-    tty->print_cr("dscr value was 0x%lx" , _dscr_val);
+    tty->print_cr("dscr value was " UINT64_FORMAT_X, _dscr_val);
   }
   bool change_requested = false;
   if (DSCR_PPC64 != (uintx)-1) {
@@ -598,7 +602,7 @@ void VM_Version::config_dscr() {
   if (change_requested) {
     (*set_dscr)(_dscr_val);
     if (Verbose) {
-      tty->print_cr("dscr was set to 0x%lx" , (*get_dscr)());
+      tty->print_cr("dscr was set to " UINT64_FORMAT_X, (*get_dscr)());
     }
   }
 }

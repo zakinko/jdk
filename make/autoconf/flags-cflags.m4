@@ -782,6 +782,16 @@ AC_DEFUN([FLAGS_SETUP_CFLAGS_CPU_DEP],
         $1_CFLAGS_CPU_JVM="${$1_CFLAGS_CPU_JVM} -DABI_ELFv2 -mcpu=power8 -mtune=power10"
       fi
     fi
+    if test "x$FLAGS_OS" = xbsd && test "x$OPENJDK_$1_OS_ENV" != xbsd.netbsd; then
+      if test "x$FLAGS_CPU" = xppc64 || test "x$FLAGS_CPU" = xppc64le; then
+        # FreeBSD has used ELFv2 on 64-bit PowerPC since 13.0, big endian
+        # as well as little, and OpenBSD has from the start.  The compiler
+        # emits it; say so to HotSpot, which otherwise builds the ELFv1
+        # function descriptor paths.  NetBSD is still ELFv1 there, which
+        # the port does not support, and os_bsd_ppc.inline.hpp says so.
+        $1_CFLAGS_CPU_JVM="${$1_CFLAGS_CPU_JVM} -DABI_ELFv2"
+      fi
+    fi
     if test "x$OPENJDK_TARGET_OS" = xaix; then
       $1_CFLAGS_CPU="-mcpu=pwr8"
     fi
