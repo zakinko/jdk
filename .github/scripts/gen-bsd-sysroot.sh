@@ -62,6 +62,30 @@ extract() {
   sudo tar xf "$1" -C "$sysroot" "${@:2}"
 }
 
+# FreeBSD and DragonFly keep their packages in a pkg(8) repository, which
+# has no directory listing to read a name from.  Its index is
+# packagesite.pkg, an archive holding packagesite.yaml, one JSON object
+# per package, whose "path" says where the package is.  A package is
+# itself an archive -- tar.zst on FreeBSD 15, txz on DragonFly -- of
+# absolute paths under /usr/local plus pkg's own +MANIFEST files, and
+# bsdtar tells the compressions apart by itself.
+fetch_pkg() {
+  local repo="$1" name="$2" path
+  if [ ! -f packagesite.yaml ]; then
+    fetch packagesite.pkg "$repo/packagesite.pkg"
+    bsdtar -xf packagesite.pkg packagesite.yaml
+  fi
+  path=$(grep -F "\"name\":\"$name\"," packagesite.yaml | head -1 |
+      grep -oE '"(repo)?path":"[^"]*"' | head -1 | sed 's/^"[a-z]*":"//; s/"$//')
+  if [ -z "$path" ]; then
+    echo "no $name in $repo" >&2
+    exit 1
+  fi
+  fetch "$name.pkg" "$repo/$path"
+  echo "extracting $name.pkg"
+  sudo bsdtar -xf "$name.pkg" -C "$sysroot" --exclude '+*' usr/local
+}
+
 case "$os" in
   netbsd)
     # comp holds the headers and the static libraries.  The X11 sets are not
@@ -105,9 +129,11 @@ case "$os" in
     done
     # The machines with no HotSpot port on BSD are built as Zero, which
     # calls through libffi.  NetBSD keeps it in pkgsrc rather than base,
-    # and a binary package unpacks relative to /usr/pkg.
+    # and a binary package unpacks relative to /usr/pkg.  The HotSpot
+    # machines get it too: a Zero build of x86_64 or aarch64 shares their
+    # cached sysroot, and a HotSpot build does not look at it.
     case "$arch" in
-      i386|sparc64|armv7|riscv64)
+      *)
         pkgs=https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$pkgarch/$netbsd_release/All
         # Take the name from the index rather than fixing a version: the
         # mirrors move to a new quarterly one machine at a time, and on
@@ -137,11 +163,21 @@ case "$os" in
       aarch64)   relpath=arm64/aarch64 ;;
       powerpc64) relpath=powerpc/powerpc64 ;;
       powerpc64le) relpath=powerpc/powerpc64le ;;
+      armv7)     relpath=arm/armv7 ;;
+      riscv64)   relpath=riscv/riscv64 ;;
       *) unsupported ;;
     esac
     base=https://download.freebsd.org/releases/$relpath/15.1-RELEASE
     fetch base.txz "$base/base.txz"
     extract base.txz
+    # Zero calls through libffi, which FreeBSD leaves to its packages.
+    # The package repository is named after the machine alone, and amd64
+    # is again the odd one out.
+    case "$arch" in
+      x86_64) pkgarch=amd64 ;;
+      *)      pkgarch=$arch ;;
+    esac
+    fetch_pkg https://pkg.freebsd.org/FreeBSD:15:$pkgarch/quarterly libffi
     ;;
 
   openbsd)
@@ -174,14 +210,23 @@ case "$os" in
     sudo mkdir -p "$sysroot/usr/local"
     echo "extracting libiconv.tgz into usr/local"
     sudo tar xf libiconv.tgz -C "$sysroot/usr/local"
-    # The Zero machines call through libffi, which is a package here too.
-    case "$arch" in i386|sparc64|armv7|riscv64)
-      fetch libffi.tgz \
-          https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/$pkgdir/libffi-3.5.2p0.tgz
-      echo "extracting libffi.tgz into usr/local"
-      sudo tar xf libffi.tgz -C "$sysroot/usr/local" include lib
-      ;;
-    esac
+    # Zero calls through libffi, which is a package here too.  It is
+    # fetched for every machine, the HotSpot ones included: a HotSpot and
+    # a Zero build of the same machine share one cached sysroot, and a
+    # build that is not Zero does not look at it.  The name comes from the
+    # index, as on NetBSD, since the version is not the same on every
+    # machine.
+    pkgs=https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/$pkgdir
+    ffi=$(curl -fsSL --retry 3 --max-time 300 "$pkgs/" |
+        grep -oE 'href="libffi-[0-9][^"]*[.]tgz"' |
+        sed 's/^href="//; s/"$//' | sort -uV | tail -1)
+    if [ -z "$ffi" ]; then
+      echo "no libffi under $pkgs" >&2
+      exit 1
+    fi
+    fetch libffi.tgz "$pkgs/$ffi"
+    echo "extracting libffi.tgz into usr/local"
+    sudo tar xf libffi.tgz -C "$sysroot/usr/local" include lib
     ;;
 
   dragonfly)
