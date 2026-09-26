@@ -1,0 +1,59 @@
+#
+# Cross-build Zero for every BSD and machine clang can target and the OS
+# ships.  See bsd-all.yml for the HotSpot machines and for the Zero
+# machines that are already folded in there.
+#
+name: 'BSD zero'
+
+on:
+  push:
+    branches:
+      - claude/bsd-zero-28
+  workflow_dispatch:
+
+concurrency:
+  group: bsd-zero-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # What the mirrors carry, printed so that a target is added or dropped on
+  # what is there rather than on memory.
+  probe:
+    name: probe mirrors
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 'List sets and libffi packages'
+        run: |
+          l() { echo "== $1"; curl -fsSL --max-time 120 "$1" | grep -oE 'href="[^"?]*"' | sed 's/href="//; s/"$//' | grep -E "${2:-.}" | head -60 || echo "(nothing / error)"; }
+          l https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/
+          for p in evbppc macppc evbmips-mips64eb evbmips-mips64el evbmips evbarm-earmv6hf evbarm-aarch64eb evbarm-earmv7hfeb; do
+            l https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/$p/binary/sets/
+          done
+          l https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/
+          for a in x86_64 aarch64 powerpc mips64eb mips64el mipsel earmv6hf aarch64eb; do
+            l https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$a/ 
+            l https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$a/10.1/All/ libffi
+            l https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$a/10.0/All/ libffi
+          done
+          l https://cdn.openbsd.org/pub/OpenBSD/7.9/
+          for a in macppc octeon loongson powerpc64; do
+            l https://cdn.openbsd.org/pub/OpenBSD/7.9/$a/ 'tgz|SHA'
+          done
+          l https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/
+          for a in amd64 aarch64 powerpc mips64 mips64el powerpc64; do
+            l https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/$a/ 'libffi|libiconv|libstdc|gcc-'
+          done
+          l https://download.freebsd.org/releases/
+          for r in amd64 arm64/aarch64 arm/armv7 riscv/riscv64 powerpc/powerpc64 powerpc/powerpc64le powerpc/powerpc i386; do
+            l https://download.freebsd.org/releases/$r/15.1-RELEASE/
+          done
+          for a in amd64 aarch64 armv7 riscv64 powerpc64 powerpc64le powerpc i386; do
+            l https://pkg.freebsd.org/FreeBSD:15:$a/
+            l https://pkg.freebsd.org/FreeBSD:15:$a/quarterly/
+            curl -fsSI --max-time 60 https://pkg.freebsd.org/FreeBSD:15:$a/quarterly/packagesite.pkg | head -3 || true
+          done
+          l https://mirror-master.dragonflybsd.org/dports/
+          l https://mirror-master.dragonflybsd.org/dports/dragonfly:6.4:x86:64/LATEST/
+          curl -fsSI --max-time 60 https://mirror-master.dragonflybsd.org/dports/dragonfly:6.4:x86:64/LATEST/packagesite.pkg | head -3 || true
+          l https://mirror-master.dragonflybsd.org/dports/dragonfly:6.4:x86:64/LATEST/All/ libffi
+          apt-cache search binutils- | grep -E 'powerpc|mips|arm|aarch64' || true
