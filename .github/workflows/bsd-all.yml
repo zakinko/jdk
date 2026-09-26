@@ -58,7 +58,7 @@ jobs:
           {"target-os":"openbsd","arch":"aarch64",
            "target-triple":"aarch64-unknown-openbsd7.9",
            "conf-name":"bsd-aarch64-openbsd",
-           "llvm-suffix":"-20"},
+           "llvm-suffix":"-19"},
           {"target-os":"freebsd","arch":"powerpc64",
            "target-triple":"powerpc64-unknown-freebsd15.1",
            "conf-name":"bsd-powerpc64-freebsd"},
