@@ -277,6 +277,15 @@ public class Platform {
             // out of them.  Not implemented, rather than implemented badly.
             return false;
         }
+        if (isBsd() && !isX64()) {
+            // The BSD side of the SA reads registers out of struct reg,
+            // whose members are named per machine, and only the amd64
+            // spelling is written.  jdk-options.m4 leaves INCLUDE_SA false
+            // here for the same reason, so jhsdb is not in the image and
+            // every test that runs it reports a missing file instead of
+            // being skipped.
+            return false;
+        }
         if (isLinux()) {
             if (isS390x() || isARM()) {
                 return false; // SA not implemented.

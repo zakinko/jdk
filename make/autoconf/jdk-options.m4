@@ -214,6 +214,12 @@ AC_DEFUN_ONCE([JDKOPT_SETUP_JDK_OPTIONS],
       || test "x$OPENJDK_TARGET_OS_ENV" = xbsd.dragonfly ; then
     INCLUDE_SA=false
   fi
+  # The BSD side of the SA reads registers out of struct reg, whose members
+  # are named per machine, and only the amd64 spelling is written here.
+  if test "x$OPENJDK_TARGET_OS" = xbsd \
+      && test "x$OPENJDK_TARGET_CPU" != xx86_64 ; then
+    INCLUDE_SA=false
+  fi
   AC_SUBST(INCLUDE_SA)
 
   # Setup default CDS alignment. On platforms where one build may run on machines with different
