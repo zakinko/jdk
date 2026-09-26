@@ -34,6 +34,7 @@
 #include "include/cds.h"
 #include "logging/logLevel.hpp"
 #include "memory/allocation.hpp"
+#include "metaprogramming/enableIf.hpp"
 #include "oops/array.hpp"
 #include "oops/compressedOops.hpp"
 #include "runtime/globals.hpp"
@@ -124,7 +125,10 @@ private:
 #undef DECLARE_CDS_MUST_MATCH_FLAG
 
   inline static void do_print(outputStream* st, bool v);
-  LP64_ONLY(inline static void do_print(outputStream* st, uint v);)
+  // uint is uintx on some 32-bit machines, and the uintx overload takes it
+  // there, but not on NetBSD/arm, where uintx is unsigned long.
+  template <typename T, ENABLE_IF(std::is_same<T, uint>::value && !std::is_same<uint, uintx>::value)>
+  inline static void do_print(outputStream* st, T v);
   inline static void do_print(outputStream* st, intx v);
   inline static void do_print(outputStream* st, uintx v);
   inline static void do_print(outputStream* st, double v);

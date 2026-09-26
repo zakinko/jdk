@@ -39,6 +39,7 @@
 #include "gc/shared/gcConfig.hpp"
 #include "logging/logStream.hpp"
 #include "memory/memoryReserver.hpp"
+#include "metaprogramming/enableIf.hpp"
 #include "oops/klass.hpp"
 #include "prims/jvmtiThreadState.hpp"
 #include "prims/upcallLinker.hpp"
@@ -540,15 +541,19 @@ inline void log_config_mismatch(uint saved, uint current, const char* name) {
   load_failure_log().print_cr(AOTCODECACHE_DISABLED_MSG "%u vs current %u", name, saved, current);
 }
 
-#ifdef _LP64
-inline void log_config_mismatch(intx saved, intx current, const char* name) {
+// intx and uintx are int and uint on some 32-bit machines, where the two
+// overloads above already take them, but long and unsigned long on others,
+// NetBSD/arm among them, as well as on every 64-bit one.  Offer these
+// wherever the types are distinct rather than wherever _LP64 is defined.
+template <typename T, ENABLE_IF(std::is_same<T, intx>::value && !std::is_same<intx, int>::value)>
+inline void log_config_mismatch(T saved, T current, const char* name) {
   load_failure_log().print_cr(AOTCODECACHE_DISABLED_MSG "%zd vs current %zd", name, saved, current);
 }
 
-inline void log_config_mismatch(uintx saved, uintx current, const char* name) {
+template <typename T, ENABLE_IF(std::is_same<T, uintx>::value && !std::is_same<uintx, uint>::value)>
+inline void log_config_mismatch(T saved, T current, const char* name) {
   load_failure_log().print_cr(AOTCODECACHE_DISABLED_MSG "%zu vs current %zu", name, saved, current);
 }
-#endif
 
 template <typename T>
 bool check_config(T saved, T current, const char* name) {
