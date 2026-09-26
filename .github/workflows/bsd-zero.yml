@@ -1,7 +1,37 @@
 #
-# Cross-build Zero for every BSD and machine clang can target and the OS
-# ships.  See bsd-all.yml for the HotSpot machines and for the Zero
-# machines that are already folded in there.
+# Cross-build Zero for every BSD and machine that clang can target and the
+# OS ships, the way bsd-all.yml builds the rest.  Each group is folded into
+# bsd-all.yml once it is green.
+#
+#   hotspot-machines  Zero on the machines that also have HotSpot: x86_64
+#                     on all four, aarch64 on NetBSD, FreeBSD and OpenBSD.
+#   freebsd           riscv64, powerpc64 and powerpc64le.
+#   openbsd           powerpc64, macppc (powerpc), octeon (mips64) and
+#                     loongson (mips64el).
+#   netbsd            macppc (powerpc), evbarm-earmv6hf, and the N64 mips
+#                     ports evbmips-mipsn64eb and -mipsn64el.
+#
+# libffi comes from the OS's packages where there are any, and is built
+# from source by gen-bsd-crosstool.sh where there are none: FreeBSD 15 has
+# packages for amd64 and aarch64 only, pkgsrc skips NetBSD's N64 mips
+# ports, and OpenBSD 7.9 has no packages at all for loongson (whose
+# libiconv is built from source the same way).
+#
+# Left out, as the mirrors stood on 2026-09-26:
+#   FreeBSD armv7     15.1 has no armv7 release: releases/arm/armv7/
+#                     15.1-RELEASE is not there, and neither is a
+#                     FreeBSD:15:armv7 package repository.
+#   FreeBSD powerpc, i386
+#                     no 15.1 release; FreeBSD 15 dropped both.
+#   NetBSD evbmips-mips64eb/-mips64el
+#                     their /usr/lib is N32, an ILP32 userland on a 64-bit
+#                     CPU that the JDK has no port for; the mipsn64 ports
+#                     above are the same machines with an N64 userland.
+#   NetBSD evbarm-aarch64eb, evbarm-earmv7hfeb, earmv6hfeb
+#                     big-endian arm: the JDK's configure knows no
+#                     aarch64_be CPU and no big-endian 32-bit arm, and
+#                     pkgsrc has no 10.1 packages for any of them.
+#   DragonFly         x86_64 is its only machine.
 #
 name: 'BSD zero'
 
@@ -11,113 +41,108 @@ on:
       - claude/bsd-zero-28
   workflow_dispatch:
 
-concurrency:
-  group: bsd-zero-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  # What the mirrors carry, printed so that a target is added or dropped on
-  # what is there rather than on memory.
-  probe:
-    name: probe mirrors
-    runs-on: ubuntu-24.04
-    steps:
-      - name: 'List sets and libffi packages'
-        run: |
-          l() { echo "== $1"; curl -fsSL --max-time 120 "$1" | grep -oE 'href="[^"?]*"' | sed 's/href="//; s/"$//' | grep -E "${2:-.}" | head -60 || echo "(nothing / error)"; }
-          l https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/
-          for p in evbppc macppc evbmips-mips64eb evbmips-mips64el evbmips evbarm-earmv6hf evbarm-aarch64eb evbarm-earmv7hfeb; do
-            l https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/$p/binary/sets/
-          done
-          l https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/
-          for a in x86_64 aarch64 powerpc mips64eb mips64el mipsel earmv6hf aarch64eb; do
-            l https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$a/ 
-            l https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$a/10.1/All/ libffi
-            l https://cdn.netbsd.org/pub/pkgsrc/packages/NetBSD/$a/10.0/All/ libffi
-          done
-          l https://cdn.openbsd.org/pub/OpenBSD/7.9/
-          for a in macppc octeon loongson powerpc64; do
-            l https://cdn.openbsd.org/pub/OpenBSD/7.9/$a/ 'tgz|SHA'
-          done
-          l https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/
-          for a in amd64 aarch64 powerpc mips64 mips64el powerpc64; do
-            l https://cdn.openbsd.org/pub/OpenBSD/7.9/packages/$a/ 'libffi|libiconv|libstdc|gcc-'
-          done
-          l https://download.freebsd.org/releases/
-          for r in amd64 arm64/aarch64 arm/armv7 riscv/riscv64 powerpc/powerpc64 powerpc/powerpc64le powerpc/powerpc i386; do
-            l https://download.freebsd.org/releases/$r/15.1-RELEASE/
-          done
-          for a in amd64 aarch64 armv7 riscv64 powerpc64 powerpc64le powerpc i386; do
-            l https://pkg.freebsd.org/FreeBSD:15:$a/
-            l https://pkg.freebsd.org/FreeBSD:15:$a/quarterly/
-            curl -fsSI --max-time 60 https://pkg.freebsd.org/FreeBSD:15:$a/quarterly/packagesite.pkg | head -3 || true
-          done
-          l https://mirror-master.dragonflybsd.org/dports/
-          l https://mirror-master.dragonflybsd.org/dports/dragonfly:6.4:x86:64/LATEST/
-          curl -fsSI --max-time 60 https://mirror-master.dragonflybsd.org/dports/dragonfly:6.4:x86:64/LATEST/packagesite.pkg | head -3 || true
-          l https://mirror-master.dragonflybsd.org/dports/dragonfly:6.4:x86:64/LATEST/All/ libffi
-          apt-cache search binutils- | grep -E 'powerpc|mips|arm|aarch64' || true
-
-  zero:
-    name: zero
+  hotspot-machines:
+    name: hotspot-machines
     uses: ./.github/workflows/build-bsd.yml
     with:
       extra-conf-options: '--with-jvm-variants=zero'
       targets: >-
         {"include":[
-          {"target-os":"netbsd",
-           "arch":"x86_64",
+          {"target-os":"netbsd","arch":"x86_64",
            "target-triple":"x86_64-unknown-netbsd",
            "conf-name":"bsd-x86_64-netbsd-zero",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
-          {"target-os":"netbsd",
-           "arch":"aarch64",
+          {"target-os":"netbsd","arch":"aarch64",
            "target-triple":"aarch64-unknown-netbsd",
            "conf-name":"bsd-aarch64-netbsd-zero",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
-          {"target-os":"freebsd",
-           "arch":"x86_64",
+          {"target-os":"freebsd","arch":"x86_64",
            "target-triple":"x86_64-unknown-freebsd15.1",
            "conf-name":"bsd-x86_64-freebsd-zero",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
-          {"target-os":"freebsd",
-           "arch":"aarch64",
+          {"target-os":"freebsd","arch":"aarch64",
            "target-triple":"aarch64-unknown-freebsd15.1",
            "conf-name":"bsd-aarch64-freebsd-zero",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
-          {"target-os":"freebsd",
-           "arch":"riscv64",
-           "target-triple":"riscv64-unknown-freebsd15.1",
-           "conf-name":"bsd-riscv64-freebsd",
-           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
-          {"target-os":"freebsd",
-           "arch":"armv7",
-           "target-triple":"armv7-unknown-freebsd15.1-gnueabihf",
-           "conf-name":"bsd-arm-freebsd",
-           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
-          {"target-os":"freebsd",
-           "arch":"powerpc64",
-           "target-triple":"powerpc64-unknown-freebsd15.1",
-           "conf-name":"bsd-ppc64-freebsd",
-           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
-          {"target-os":"freebsd",
-           "arch":"powerpc64le",
-           "target-triple":"powerpc64le-unknown-freebsd15.1",
-           "conf-name":"bsd-ppc64le-freebsd",
-           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
-          {"target-os":"openbsd",
-           "arch":"x86_64",
+          {"target-os":"openbsd","arch":"x86_64",
            "target-triple":"x86_64-unknown-openbsd7.9",
            "conf-name":"bsd-x86_64-openbsd-zero",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
-          {"target-os":"openbsd",
-           "arch":"aarch64",
+          {"target-os":"openbsd","arch":"aarch64",
            "target-triple":"aarch64-unknown-openbsd7.9",
            "conf-name":"bsd-aarch64-openbsd-zero",
            "llvm-suffix":"-20",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
-          {"target-os":"openbsd",
-           "arch":"powerpc64",
+          {"target-os":"dragonfly","arch":"x86_64",
+           "target-triple":"x86_64-unknown-dragonfly",
+           "conf-name":"bsd-x86_64-dragonfly-zero",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"}]}
+
+  freebsd:
+    name: freebsd
+    uses: ./.github/workflows/build-bsd.yml
+    with:
+      extra-conf-options: '--with-jvm-variants=zero'
+      targets: >-
+        {"include":[
+          {"target-os":"freebsd","arch":"riscv64",
+           "target-triple":"riscv64-unknown-freebsd15.1",
+           "conf-name":"bsd-riscv64-freebsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"freebsd","arch":"powerpc64",
+           "target-triple":"powerpc64-unknown-freebsd15.1",
+           "conf-name":"bsd-ppc64-freebsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"freebsd","arch":"powerpc64le",
+           "target-triple":"powerpc64le-unknown-freebsd15.1",
+           "conf-name":"bsd-ppc64le-freebsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"}]}
+
+  openbsd:
+    name: openbsd
+    uses: ./.github/workflows/build-bsd.yml
+    with:
+      extra-conf-options: '--with-jvm-variants=zero'
+      targets: >-
+        {"include":[
+          {"target-os":"openbsd","arch":"powerpc64",
            "target-triple":"powerpc64-unknown-openbsd7.9",
            "conf-name":"bsd-ppc64-openbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"openbsd","arch":"powerpc",
+           "target-triple":"powerpc-unknown-openbsd7.9",
+           "conf-name":"bsd-ppc-openbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"openbsd","arch":"mips64",
+           "target-triple":"mips64-unknown-openbsd7.9",
+           "conf-name":"bsd-mips64-openbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
+          {"target-os":"openbsd","arch":"mips64el",
+           "target-triple":"mips64el-unknown-openbsd7.9",
+           "conf-name":"bsd-mips64el-openbsd",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"}]}
+
+  netbsd:
+    name: netbsd
+    uses: ./.github/workflows/build-bsd.yml
+    with:
+      extra-conf-options: '--with-jvm-variants=zero'
+      targets: >-
+        {"include":[
+          {"target-os":"netbsd","arch":"powerpc",
+           "target-triple":"powerpc-unknown-netbsd",
+           "conf-name":"bsd-ppc-netbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
+          {"target-os":"netbsd","arch":"armv6",
+           "target-triple":"armv6-unknown-netbsd-eabihf",
+           "conf-name":"bsd-armv6-netbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
+          {"target-os":"netbsd","arch":"mips64",
+           "target-triple":"mips64-unknown-netbsd",
+           "conf-name":"bsd-mips64-netbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
+          {"target-os":"netbsd","arch":"mips64el",
+           "target-triple":"mips64el-unknown-netbsd",
+           "conf-name":"bsd-mips64el-netbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"}]}
