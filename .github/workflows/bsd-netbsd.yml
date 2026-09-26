@@ -15,6 +15,7 @@ on:
   push:
     branches:
       - netbsd-arches-28
+      - claude/eloquent-dirac-pfg00n
   workflow_dispatch:
 
 concurrency:
