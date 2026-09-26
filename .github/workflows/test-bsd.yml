@@ -155,8 +155,11 @@ jobs:
           usesh: true
           copyback: true
           envs: 'TEST_SUITE'
+          # -U: the image carries some of these already, and pkg_add
+          # refuses a newer version from the mirror without it -- "A
+          # different version of bash-5.3.20 is already installed".
           prepare: |
-            /usr/sbin/pkg_add bash gmake zip unzip
+            /usr/sbin/pkg_add -U bash gmake zip unzip
           run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
