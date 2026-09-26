@@ -77,6 +77,14 @@ else
       exeinvoke.c exestack-gap.c exestack-tls.c libAsyncGetCallTraceTest.cpp
 endif
 
+ifeq ($(call isTargetOs, bsd), true)
+  # NetBSD leaves the initial thread without a pthread descriptor when
+  # libpthread arrives through a dlopen, and this launcher reaches the
+  # VM that way, so pthread_attr_get_np(pthread_self()) faults inside
+  # JNI_CreateJavaVM.  Linking the library in from the start settles it.
+  HOTSPOT_JTREG_EXECUTABLES_LIBS_exeFPRegs := $(LIBPTHREAD)
+endif
+
 ifneq ($(call isTargetOs, linux)+$(call isTargetCpu, aarch64), true+true)
   HOTSPOT_JTREG_EXCLUDE += libTestSVEWithJNI.c
 endif
