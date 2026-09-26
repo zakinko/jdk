@@ -172,7 +172,7 @@ jobs:
         id: build
         uses: ./.github/actions/do-build
         with:
-          make-target: "${{ matrix.target-os == 'netbsd' && 'product-bundles test-bundles' || 'images' }} ${{ inputs.make-arguments }}"
+          make-target: "product-bundles test-bundles ${{ inputs.make-arguments }}"
           platform: ${{ matrix.conf-name }}
         if: inputs.dry-run == false
 
@@ -211,14 +211,9 @@ jobs:
         if: inputs.dry-run == false && matrix.target-os == 'netbsd'
 
       # The bundles are what a machine running the OS picks up to test with:
-      # this runner cannot execute a line of what it just built.  Only NetBSD
-      # makes them, because only NetBSD is tested here -- and because the
-      # jtreg native code does not compile warning-clean on OpenBSD at all:
-      # 589 of its files print a jlong with %ld, which is right everywhere
-      # int64_t is long and wrong on the one BSD where it is long long.
-      # That is 1,235 diagnostics in the test suite, not a port defect.
+      # this runner cannot execute a line of what it just built.
       - name: 'Upload bundles'
         uses: ./.github/actions/upload-bundles
         with:
           platform: ${{ matrix.conf-name }}
-        if: inputs.dry-run == false && matrix.target-os == 'netbsd'
+        if: inputs.dry-run == false

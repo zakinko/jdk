@@ -1,29 +1,28 @@
 #
-# Cross-build NetBSD for every machine it runs on that this tree can target.
+# Cross-build every BSD on every machine this tree can target, then run
+# tier1 on each BSD and machine a virtual machine can be booted for.
 #
-# x86_64 and aarch64 have HotSpot ports on the BSDs; the rest do not, and are
-# built as Zero, which calls through libffi from pkgsrc.  x86_64 is already
-# built by the bsd job in main.yml; it is here as well so that this workflow
-# says, on its own, whether the NetBSD build as a whole holds.
+# x86_64 and aarch64 have HotSpot ports on the BSDs; i386, sparc64, armv7
+# and riscv64 do not, and are built as Zero, which calls through libffi
+# from the OS's packages.  DragonFly is x86_64 only.  NetBSD builds against
+# 10.1 but for riscv64, whose first release is 11.0; the reasons are in
+# gen-bsd-sysroot.sh.  NetBSD is also built once with the desktop modules,
+# which pull in X11 and are otherwise left out.
 #
-# riscv64 is taken from NetBSD 11.0, the first release with a riscv-riscv64
-# port; the others stay on 10.1 for the reason gen-bsd-sysroot.sh gives.
+# tier1 runs from the bundles the build uploaded, in a VM of the same
+# release, twelve parts per machine.  The Zero machines stop at the build:
+# no image boots them fast enough to run tier1 in a hosted job.
 #
-# Once the HotSpot builds are through, tier1 runs on a real NetBSD 10.1 for
-# both of them, in a VM on the runner, from the bundles the build uploaded.
-# The Zero machines stop at the build: there is nothing here to run them on.
-#
-name: 'BSD NetBSD'
+name: 'BSD all'
 
 on:
   push:
     branches:
-      - netbsd-arches-28
       - claude/eloquent-dirac-pfg00n
   workflow_dispatch:
 
 concurrency:
-  group: bsd-netbsd-${{ github.ref }}
+  group: bsd-all-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -35,12 +34,26 @@ jobs:
         {"include":[
           {"target-os":"netbsd","arch":"x86_64",
            "target-triple":"x86_64-unknown-netbsd",
-           "conf-name":"bsd-x86_64-netbsd",
-           "extra-configure":""},
+           "conf-name":"bsd-x86_64-netbsd"},
+          {"target-os":"freebsd","arch":"x86_64",
+           "target-triple":"x86_64-unknown-freebsd15.1",
+           "conf-name":"bsd-x86_64-freebsd"},
+          {"target-os":"openbsd","arch":"x86_64",
+           "target-triple":"x86_64-unknown-openbsd7.9",
+           "conf-name":"bsd-x86_64-openbsd"},
+          {"target-os":"dragonfly","arch":"x86_64",
+           "target-triple":"x86_64-unknown-dragonfly",
+           "conf-name":"bsd-x86_64-dragonfly"},
           {"target-os":"netbsd","arch":"aarch64",
            "target-triple":"aarch64-unknown-netbsd",
-           "conf-name":"bsd-aarch64-netbsd",
-           "extra-configure":""}]}
+           "conf-name":"bsd-aarch64-netbsd"},
+          {"target-os":"freebsd","arch":"aarch64",
+           "target-triple":"aarch64-unknown-freebsd15.1",
+           "conf-name":"bsd-aarch64-freebsd"},
+          {"target-os":"openbsd","arch":"aarch64",
+           "target-triple":"aarch64-unknown-openbsd7.9",
+           "conf-name":"bsd-aarch64-openbsd",
+           "llvm-suffix":"-20"}]}
 
   zero:
     name: zero
@@ -53,18 +66,46 @@ jobs:
            "target-triple":"i386-unknown-netbsd",
            "conf-name":"bsd-i386-netbsd",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
+          {"target-os":"openbsd","arch":"i386",
+           "target-triple":"i386-unknown-openbsd7.9",
+           "conf-name":"bsd-i386-openbsd",
+           "llvm-suffix":"-20",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
           {"target-os":"netbsd","arch":"sparc64",
            "target-triple":"sparc64-unknown-netbsd",
            "conf-name":"bsd-sparc64-netbsd",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib --with-extra-cflags=-mcmodel=medany --with-extra-cxxflags=-mcmodel=medany"},
+          {"target-os":"openbsd","arch":"sparc64",
+           "target-triple":"sparc64-unknown-openbsd7.9",
+           "conf-name":"bsd-sparc64-openbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib --with-extra-cflags=-mcmodel=medany --with-extra-cxxflags=-mcmodel=medany"},
           {"target-os":"netbsd","arch":"armv7",
            "target-triple":"armv7-unknown-netbsd-eabihf",
            "conf-name":"bsd-arm-netbsd",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
+          {"target-os":"openbsd","arch":"armv7",
+           "target-triple":"armv7-unknown-openbsd7.9",
+           "conf-name":"bsd-arm-openbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"},
           {"target-os":"netbsd","arch":"riscv64",
            "target-triple":"riscv64-unknown-netbsd",
            "conf-name":"bsd-riscv64-netbsd",
-           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"}]}
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
+          {"target-os":"openbsd","arch":"riscv64",
+           "target-triple":"riscv64-unknown-openbsd7.9",
+           "conf-name":"bsd-riscv64-openbsd",
+           "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/local/include --with-libffi-lib=$PWD/sysroot/usr/local/lib"}]}
+
+  headful:
+    name: headful
+    uses: ./.github/workflows/build-bsd.yml
+    with:
+      targets: >-
+        {"include":[
+          {"target-os":"netbsd","arch":"x86_64",
+           "target-triple":"x86_64-unknown-netbsd",
+           "conf-name":"bsd-x86_64-netbsd-headful",
+           "extra-configure":"--disable-headless-only --x-includes=$PWD/sysroot/usr/X11R7/include --x-libraries=$PWD/sysroot/usr/X11R7/lib"}]}
 
   # get-jtreg in the test jobs downloads an artifact somebody has to have
   # built; upstream's main.yml does it in its preparation job.
@@ -82,24 +123,31 @@ jobs:
       - name: 'Build JTReg'
         uses: ./.github/actions/build-jtreg
 
-  tier1-x86_64:
-    name: tier1 x86_64
+  # A guest whose machine differs from the runner's is emulated, so the
+  # aarch64 ones go on an arm64 runner; that runner has no /dev/kvm either,
+  # so they are emulated there too, only less so.
+  #
+  # Each machine is tested whether or not the others built: one that did not
+  # fails at fetching its bundles, and the rest are not held back by it.
+  tier1:
+    name: tier1
     needs: [jtreg, hotspot]
+    if: ${{ !cancelled() && needs.jtreg.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: netbsd,    arch: '',        platform: bsd-x86_64-netbsd,     release: '10.1',  runner: ubuntu-24.04}
+          - {os: freebsd,   arch: '',        platform: bsd-x86_64-freebsd,    release: '15.1',  runner: ubuntu-24.04}
+          - {os: openbsd,   arch: '',        platform: bsd-x86_64-openbsd,    release: '7.9',   runner: ubuntu-24.04}
+          - {os: dragonfly, arch: '',        platform: bsd-x86_64-dragonfly,  release: '6.4.2', runner: ubuntu-24.04}
+          - {os: netbsd,    arch: 'aarch64', platform: bsd-aarch64-netbsd,    release: '10.1',  runner: ubuntu-24.04-arm}
+          - {os: freebsd,   arch: 'aarch64', platform: bsd-aarch64-freebsd,   release: '15.1',  runner: ubuntu-24.04-arm}
+          - {os: openbsd,   arch: 'aarch64', platform: bsd-aarch64-openbsd,   release: '7.9',   runner: ubuntu-24.04-arm}
     uses: ./.github/workflows/test-bsd.yml
     with:
-      target-os: 'netbsd'
-      platform: 'bsd-x86_64-netbsd'
-      release: '10.1'
-
-  # The 21 branch runs this on an arm64 runner; that runner has no
-  # /dev/kvm, so the guest is emulated there as it would be anywhere.
-  tier1-aarch64:
-    name: tier1 aarch64
-    needs: [jtreg, hotspot]
-    uses: ./.github/workflows/test-bsd.yml
-    with:
-      target-os: 'netbsd'
-      platform: 'bsd-aarch64-netbsd'
-      arch: 'aarch64'
-      runner: 'ubuntu-24.04-arm'
-      release: '10.1'
+      target-os: ${{ matrix.os }}
+      platform: ${{ matrix.platform }}
+      arch: ${{ matrix.arch }}
+      runner: ${{ matrix.runner }}
+      release: ${{ matrix.release }}

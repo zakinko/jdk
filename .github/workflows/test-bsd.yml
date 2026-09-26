@@ -1,5 +1,7 @@
 #
 # Run tier1 on a real BSD, in a virtual machine on the Linux runner.
+# NetBSD, FreeBSD, OpenBSD and DragonFly each boot through their own
+# vmactions action and run .github/scripts/bsd-tier1-in-vm.sh.
 #
 # The BSD build cross-compiles and cannot run a line of what it produces, so
 # what it proves stops at "it compiles". This picks the bundles up and runs
@@ -24,7 +26,7 @@ on:
         type: string
         default: 'bsd-x86_64-netbsd'
       release:
-        description: 'The BSD release to run in'
+        description: 'The BSD release to run in, the one the sysroot is from'
         required: false
         type: string
         default: '10.1'
@@ -139,166 +141,84 @@ jobs:
           echo "runner: ${{ runner.os }} ${{ runner.arch }}"
           ls -l /dev/kvm || echo "/dev/kvm: absent, the guest will be emulated"
 
+      # One step per BSD, because each has its own action; what runs inside
+      # is the same script on all four.  prepare installs what the
+      # makefiles and the script need, plus what the JDK itself links
+      # against that the base system does not carry.
       - name: 'Run tests in a NetBSD virtual machine'
-        id: run-tests
         uses: vmactions/netbsd-vm@v1.5.0
         with:
           release: ${{ inputs.release }}
           arch: ${{ inputs.arch }}
-          mem: 6144
+          mem: 8192
           cpu: 4
           usesh: true
           copyback: true
           envs: 'TEST_SUITE'
           prepare: |
             /usr/sbin/pkg_add bash gmake zip unzip
-          run: |
-            set -e
-            export PATH=/usr/pkg/bin:/usr/pkg/sbin:$PATH
-            JDK="$PWD/bundles/jdk/`ls bundles/jdk`"
-            TESTS="$PWD/bundles/tests"
-            JT="$PWD/jtreg/installed"
-
-            # A JDK built on NetBSD is marked as it is linked; one cross-built
-            # from Linux cannot be, because paxctl(8) only exists here. Without
-            # the mark every launcher dies in VM initialisation, because PaX
-            # refuses the writable and executable mapping the JIT asks for.
-            find "$JDK" "$TESTS" -type f \( -perm -u+x -o -name '*.so' \) -print |
-              while read f; do /usr/sbin/paxctl +m "$f" >/dev/null 2>&1 || :; done
-
-            # The launchers inside the jmods need it too.  jlink assembles a
-            # new image out of those, not out of bin/, so marking only the
-            # unpacked tree leaves every image a test builds unmarked, and it
-            # dies before running a line:
-            #
-            #   Error occurred during initialization of VM
-            #   Could not reserve enough space in CodeHeap 'profiled nmethods'
-            #
-            # which is PaX MPROTECT refusing the JIT's mapping, not a size.
-            # Eight tier1 tests build an image and run it, and all eight
-            # failed with that line.  A JDK built on NetBSD does not need this
-            # -- paxctl runs during its build, so the copies it packs are
-            # already marked -- but one cross-built from Linux cannot be,
-            # paxctl being NetBSD's own tool.
-            #
-            # A jmod is a zip behind a four-byte header.  Replace only the
-            # entries that need marking and pass -D, because the jmod reader
-            # rejects directory entries that a plain rezip would add:
-            #
-            #   Resources tree, invalid data structure, skipping /java.base/
-            #
-            # Most jmods carry no launcher; those are left alone.
-            echo "--- marking the launchers inside the jmods ---"
-            WORK="$PWD/jmodwork"
-            for m in "$JDK"/jmods/*.jmod; do
-              rm -rf "$WORK"; mkdir -p "$WORK"
-              dd if="$m" bs=1 count=4 of="$WORK/magic" 2>/dev/null
-              dd if="$m" bs=4 skip=1 of="$WORK/body.zip" 2>/dev/null
-              ( cd "$WORK" && unzip -q -o body.zip 'bin/*' ) >/dev/null 2>&1 || continue
-              [ -d "$WORK/bin" ] || continue
-              n=0
-              for f in "$WORK"/bin/*; do
-                [ -f "$f" ] || continue
-                /usr/sbin/paxctl +m "$f" >/dev/null 2>&1 && n=`expr $n + 1`
-              done
-              [ "$n" -gt 0 ] || continue
-              ( cd "$WORK" && zip -q -D -X body.zip bin/* ) || continue
-              cat "$WORK/magic" "$WORK/body.zip" > "$m.new" && mv "$m.new" "$m"
-              echo "  $n in ${m##*/}"
-            done
-            rm -rf "$WORK"
-
-            # Prove it took: build the smallest image jlink can make and read
-            # the flag back off its launcher.  Getting this wrong costs a full
-            # run, and it fails as a CodeHeap message an hour later rather
-            # than here.
-            # Keep what jlink says.  Thrown away, an abort here arrives as
-            # "could not build a probe image" and the run has to be repeated
-            # to learn anything; aarch64 spent one that way.
-            "$JDK/bin/jlink" --module-path "$JDK/jmods" --add-modules java.base \
-                --output "$PWD/paxprobe" > "$PWD/jlink.log" 2>&1 || :
-            if [ -x "$PWD/paxprobe/bin/java" ]; then
-              /usr/sbin/paxctl "$PWD/paxprobe/bin/java"
-              /usr/sbin/paxctl "$PWD/paxprobe/bin/java" | grep -q 'mprotect' || {
-                echo "a jlink-built image comes out unmarked; the eight image"
-                echo "tests will fail in VM initialisation"
-                exit 1
-              }
-              "$PWD/paxprobe/bin/java" -version 2>&1 | head -2
-            else
-              echo "jlink could not build a probe image; it said:"
-              sed 's/^/  /' "$PWD/jlink.log" | head -40
-              for e in "$PWD"/hs_err_pid*.log; do
-                [ -f "$e" ] || continue
-                echo "--- $e ---"
-                head -30 "$e" | sed 's/^/  /'
-              done
-              exit 1
-            fi
-            rm -rf "$PWD/paxprobe"
-
-            # The launcher failing to find libjli.so has cost two runs now.
-            # Say what is actually there and what the binary asks for, so the
-            # next failure does not need a third.
-            echo "--- what the VM sees ---"
-            uname -a
-            ls -l "$JDK/lib/libjli.so" || echo "libjli.so is not there"
-            readelf -d "$JDK/bin/java" 2>/dev/null | grep -E 'RPATH|RUNPATH|NEEDED' ||
-              objdump -p "$JDK/bin/java" 2>/dev/null | grep -E 'RPATH|RUNPATH|NEEDED'
-            ldd "$JDK/bin/java" 2>&1 | head -6
-
-            # RPATH is right and the library is there, so the question left is
-            # whether this ld.elf_so expands $ORIGIN.  Naming the directory
-            # outright answers it: if the launcher starts this way and not the
-            # other, $ORIGIN is what is missing.
-            echo "--- with the directory named outright ---"
-            LD_LIBRARY_PATH="$JDK/lib" "$JDK/bin/java" -version 2>&1 | head -3
-            echo "--- end ---"
-
-            "$JDK/bin/java" -version
-
-            gmake test-prebuilt \
-              TEST="$TEST_SUITE" \
-              BOOT_JDK="$JDK" \
-              JT_HOME="$JT" \
-              JDK_IMAGE_DIR="$JDK" \
-              TEST_IMAGE_DIR="$TESTS" \
-              JTREG='JAVA_OPTIONS=-XX:-CreateCoredumpOnCrash;VERBOSE=fail,error,time;KEYWORDS=!headful'
-
-            # make test-prebuilt prints "TEST FAILURE" and then returns 0.  It
-            # reports the failure as a file, not as an exit status:
-            #
-            #   build/run-test-prebuilt/make-support/exit-with-error
-            #
-            # Upstream's test.yml reads that file in gen-test-summary.sh, puts
-            # failure=true into GITHUB_OUTPUT, and a later step calls
-            # core.setFailed().  None of it reaches here, because make runs
-            # inside the VM and the runner never sees its output file.  So this
-            # job stayed green through a run with 15 failing tests, and the
-            # only way to know was to read the log.
-            #
-            # Read the file where make wrote it.
-            R=build/run-test-prebuilt
-            if [ -f $R/make-support/exit-with-error ]; then
-              echo "--- tests that failed ---"
-              cat $R/test-results/*/text/newfailures.txt 2>/dev/null || :
-              echo "--- tests that errored ---"
-              cat $R/test-results/*/text/other_errors.txt 2>/dev/null || :
-              echo "--- end ---"
-            fi
-
-            # Deliberately not "exit 1" here.  vmactions copies the workspace
-            # back out of the VM only when the step succeeds, so failing
-            # inside it threw away the files the failure has to be read from:
-            # every red job uploaded an empty artifact,
-            #
-            #   No files were found with the provided path: results
-            #
-            # and the hs_err added for exactly this was never collected once.
-            # The verdict is passed on the runner instead, below, after the
-            # copy back.
+          run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
+        if: inputs.target-os == 'netbsd'
+
+      # jtreg's process tests read /proc, which FreeBSD does not mount.
+      - name: 'Run tests in a FreeBSD virtual machine'
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: ${{ inputs.release }}
+          arch: ${{ inputs.arch }}
+          mem: 8192
+          cpu: 4
+          usesh: true
+          copyback: true
+          envs: 'TEST_SUITE'
+          prepare: |
+            mount -t procfs proc /proc
+            pkg install -y bash gmake zip unzip gsed gnugrep
+          run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
+        env:
+          TEST_SUITE: ${{ matrix.test-suite }}
+        if: inputs.target-os == 'freebsd'
+
+      # OpenBSD refuses a writable and executable mapping on a file system
+      # not mounted wxallowed, and the workspace is under /home.  The JDK
+      # links against libiconv, which OpenBSD ships as a package.
+      - name: 'Run tests in an OpenBSD virtual machine'
+        uses: vmactions/openbsd-vm@v1
+        with:
+          release: ${{ inputs.release }}
+          arch: ${{ inputs.arch }}
+          mem: 8192
+          cpu: 4
+          usesh: true
+          copyback: true
+          envs: 'TEST_SUITE'
+          prepare: |
+            mount -u -o wxallowed /home
+            until pkg_add bash gmake zip unzip-- gsed ggrep libiconv; do
+              echo retrying in 10 seconds; sleep 10
+            done
+          run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
+        env:
+          TEST_SUITE: ${{ matrix.test-suite }}
+        if: inputs.target-os == 'openbsd'
+
+      - name: 'Run tests in a DragonFly virtual machine'
+        uses: vmactions/dragonflybsd-vm@v1
+        with:
+          release: ${{ inputs.release }}
+          mem: 8192
+          cpu: 4
+          usesh: true
+          copyback: true
+          envs: 'TEST_SUITE'
+          prepare: |
+            pkg install -y bash gmake zip unzip gsed gnugrep
+          run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
+        env:
+          TEST_SUITE: ${{ matrix.test-suite }}
+        if: inputs.target-os == 'dragonfly'
 
       - name: 'Package test results'
         run: |
