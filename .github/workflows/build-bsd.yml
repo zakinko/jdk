@@ -113,7 +113,8 @@ jobs:
             case '${{ matrix.arch }}' in
               x86_64) gnu= ;;
               i386)   gnu=i686-linux-gnu ;;
-              armv7)  gnu=arm-linux-gnueabihf ;;
+              armv6|armv7) gnu=arm-linux-gnueabihf ;;
+              mips64|mips64el) gnu='${{ matrix.arch }}-linux-gnuabi64' ;;
               *)      gnu='${{ matrix.arch }}-linux-gnu' ;;
             esac
             [ -z "$gnu" ] || sudo apt-get install "binutils-$gnu"

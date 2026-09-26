@@ -88,9 +88,11 @@ case "$os" in
     # the host's and rejects an aarch64 crt0.o as "file in wrong format".
     # Debian names the 32-bit x86 toolchain after i686, not after i386.
     # 32-bit arm is the one whose tuple does not end in -gnu.
+    # 64-bit mips is named after its ABI as well.
     case "${triple%%-*}" in
       i386)  gnu=i686-linux-gnu ;;
-      armv7) gnu=arm-linux-gnueabihf ;;
+      armv6|armv7) gnu=arm-linux-gnueabihf ;;
+      mips64|mips64el) gnu=${triple%%-*}-linux-gnuabi64 ;;
       *)     gnu=${triple%%-*}-linux-gnu ;;
     esac
     ld_path=$(command -v "$gnu-ld.bfd" || true)
@@ -106,8 +108,14 @@ case "$os" in
     # libraries itself, so the Linux emulation links the same thing.  The
     # other machines are asked for generic emulations that Debian has.
     # A long link line -- libjvm's -- reaches ld as a response file, so
-    # the name is rewritten inside those too.
-    if [ "$gnu" = arm-linux-gnueabihf ]; then
+    # the name is rewritten inside those too.  32-bit powerpc is the same
+    # story, with elf32ppc_nbsd for elf32ppclinux.
+    case "$gnu" in
+      arm-linux-gnueabihf) nbsd_emul=armelf_nbsd_eabihf ; linux_emul=armelf_linux_eabi ;;
+      powerpc-linux-gnu)   nbsd_emul=elf32ppc_nbsd ;      linux_emul=elf32ppclinux ;;
+      *)                   nbsd_emul= ;;
+    esac
+    if [ -n "$nbsd_emul" ]; then
       cat > "$bindir/$triple-ld" <<W
 #!/bin/sh
 tmp=\$(mktemp -d)
@@ -116,11 +124,11 @@ n=0
 for a; do
   shift
   case "\$a" in
-    armelf_nbsd_eabihf) a=armelf_linux_eabi ;;
+    $nbsd_emul) a=$linux_emul ;;
     @*)
       if [ -f "\${a#@}" ]; then
         n=\$((n + 1))
-        sed 's/armelf_nbsd_eabihf/armelf_linux_eabi/g' "\${a#@}" > "\$tmp/\$n"
+        sed 's/$nbsd_emul/$linux_emul/g' "\${a#@}" > "\$tmp/\$n"
         a="@\$tmp/\$n"
       fi
       ;;
@@ -215,3 +223,55 @@ printf 'int main(void){return 0;}\n' > "$tmp/probe.c"
 "$bindir/$triple-clang" "$tmp/probe.c" -o "$tmp/probe"
 file "$tmp/probe"
 rm -rf "$tmp"
+
+# Zero calls through libffi, and gen-bsd-sysroot.sh takes it from the
+# OS's packages where there are any.  Some machines have none -- FreeBSD
+# 15 builds packages for amd64 and aarch64 only, pkgsrc skips NetBSD's
+# N64 mips ports, OpenBSD 7.9 has none at all for loongson -- and for
+# those it is built here, with the wrappers just written, into the
+# directory the packages would have used.  OpenBSD's libiconv, which
+# java.instrument and libjdwp need, is the same.  Done after the sysroot
+# is cached is fine: the cache is saved at the end of the job, with
+# these in it.
+case "$os" in
+  netbsd) prefix=/usr/pkg ;;
+  *)      prefix=/usr/local ;;
+esac
+build_from_source() {
+  local name="$1" url="$2"
+  shift 2
+  echo "building $name for $triple from $url"
+  local src
+  src=$(mktemp -d)
+  curl -fsSL --retry 3 --retry-all-errors --max-time 600 -o "$src.tar.gz" "$url"
+  tar xzf "$src.tar.gz" -C "$src" --strip-components=1
+  rm -f "$src.tar.gz"
+  (
+    cd "$src"
+    ./configure --host="$triple" --prefix="$prefix" \
+        CC="$bindir/$triple-clang" AR="$bindir/$triple-ar" \
+        RANLIB="$bindir/$triple-ranlib" STRIP="$bindir/$triple-strip" \
+        NM="$bindir/$triple-nm" "$@" > configure.out 2>&1 ||
+        { cat configure.out config.log; exit 1; }
+    make -j"$(nproc)" > make.out 2>&1 || { tail -100 make.out; exit 1; }
+    make install DESTDIR="$sysroot" > /dev/null
+  )
+  rm -rf "$src"
+  # libtool's .la files name the build's paths; nothing here reads them.
+  rm -f "$sysroot$prefix"/lib/*.la
+  # As in gen-bsd-sysroot.sh: OpenBSD's libtool installs libfoo.so.N.M
+  # alone, and lld wants a libfoo.so to find.
+  for so in "$sysroot$prefix"/lib/lib*.so.*; do
+    [ -e "$so" ] || continue
+    stem=${so%%.so.*}
+    [ -e "$stem.so" ] || ln -sf "$(basename "$so")" "$stem.so"
+  done
+}
+if [ ! -e "$sysroot$prefix/include/ffi.h" ] && [ ! -e "$sysroot/usr/include/ffi.h" ]; then
+  build_from_source libffi \
+      https://github.com/libffi/libffi/releases/download/v3.5.2/libffi-3.5.2.tar.gz \
+      --disable-docs --disable-multi-os-directory
+fi
+if [ "$os" = openbsd ] && [ ! -e "$sysroot$prefix/include/iconv.h" ]; then
+  build_from_source libiconv https://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.18.tar.gz
+fi
