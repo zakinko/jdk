@@ -1430,6 +1430,14 @@ void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
     #define EM_X86_64       62              /* AMD x86-64 */
   #endif
 
+  #ifndef EM_AARCH64
+    #define EM_AARCH64      183             /* ARM 64 bit */
+  #endif
+
+  #ifndef EM_RISCV
+    #define EM_RISCV        243             /* RISC-V */
+  #endif
+
   static const arch_t arch_array[]={
     {EM_386,         EM_386,     ELFCLASS32, ELFDATA2LSB, (char*)"IA 32"},
     {EM_486,         EM_386,     ELFCLASS32, ELFDATA2LSB, (char*)"IA 32"},
