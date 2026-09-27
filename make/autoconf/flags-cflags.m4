@@ -317,6 +317,13 @@ AC_DEFUN([FLAGS_SETUP_OPTIMIZATION],
 
     if test "x$TOOLCHAIN_TYPE" = xgcc; then
       C_O_FLAG_LTO="-flto=auto -fuse-linker-plugin -fno-strict-aliasing -fno-fat-lto-objects"
+    elif test "x$OPENJDK_TARGET_OS_ENV" = xbsd.netbsd; then
+      # clang's -flto writes LLVM bitcode into the object files, and NetBSD
+      # links with GNU ld (see flags-ldflags.m4), which reads bitcode only
+      # through LLVM's gold plugin; without it the link stops at "file
+      # format not recognized".  The few libraries that ask for LTO are
+      # built without it there.
+      C_O_FLAG_LTO=""
     else
       C_O_FLAG_LTO="-flto -fno-strict-aliasing"
     fi

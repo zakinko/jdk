@@ -71,6 +71,10 @@ AC_DEFUN([FLAGS_SETUP_LDFLAGS_HELPER],
         -fPIC"
 
     LDFLAGS_LTO="-flto=auto -fuse-linker-plugin -fno-strict-aliasing $DEBUG_PREFIX_CFLAGS"
+    if test "x$OPENJDK_TARGET_OS_ENV" = xbsd.netbsd; then
+      # No LTO where the objects are linked by GNU ld; see C_O_FLAG_LTO.
+      LDFLAGS_LTO=""
+    fi
     LDFLAGS_CXX_PARTIAL_LINKING="$MACHINE_FLAG -r"
 
     if test "x$OPENJDK_TARGET_OS" = xlinux; then
