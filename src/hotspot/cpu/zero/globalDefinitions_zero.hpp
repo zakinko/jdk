@@ -36,7 +36,13 @@
 // The default padding size for data structures to avoid false sharing.
 #define DEFAULT_PADDING_SIZE DEFAULT_CACHE_LINE_SIZE
 
+// libffi 3.5's ffitarget.h for PowerPC tests _CALL_ELF without asking
+// whether it is defined, and 32-bit PowerPC does not define it, so -Wundef
+// stops every file that gets here.  It is libffi's header, not ours.
+PRAGMA_DIAG_PUSH
+PRAGMA_DISABLE_GCC_WARNING("-Wundef")
 #include <ffi.h>
+PRAGMA_DIAG_POP
 
 // Indicates whether the C calling conventions require that
 // 32-bit integer argument values are extended to 64 bits.
