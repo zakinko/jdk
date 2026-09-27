@@ -107,7 +107,12 @@ jobs:
           # post-RA pass on aarch64-unknown-openbsd.
           if [ -n '${{ matrix.llvm-suffix }}' ]; then
             v=$(echo '${{ matrix.llvm-suffix }}' | tr -d -)
-            sudo apt-get install "clang-$v" "lld-$v" "llvm-$v"
+            # A release Ubuntu does not carry comes from apt.llvm.org, whose
+            # script adds the repository and installs clang, lld and llvm.
+            if ! sudo apt-get install "clang-$v" "lld-$v" "llvm-$v"; then
+              wget -q https://apt.llvm.org/llvm.sh
+              sudo bash llvm.sh "$v"
+            fi
           fi
           if [ '${{ matrix.target-os }}' = netbsd ]; then
             case '${{ matrix.arch }}' in
