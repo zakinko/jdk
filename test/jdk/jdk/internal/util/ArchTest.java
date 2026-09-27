@@ -32,6 +32,7 @@ import static jdk.internal.util.Architecture.AARCH64;
 import static jdk.internal.util.Architecture.ARM;
 import static jdk.internal.util.Architecture.LOONGARCH64;
 import static jdk.internal.util.Architecture.MIPSEL;
+import static jdk.internal.util.Architecture.MIPS64;
 import static jdk.internal.util.Architecture.MIPS64EL;
 import static jdk.internal.util.Architecture.PPC;
 import static jdk.internal.util.Architecture.PPC64;
@@ -80,6 +81,7 @@ public class ArchTest {
                 Arguments.of("arm", ARM, 32, ByteOrder.LITTLE_ENDIAN, Architecture.isARM()),
                 Arguments.of("i386", X86, 32, ByteOrder.LITTLE_ENDIAN, Architecture.isX86()),
                 Arguments.of("loongarch64", LOONGARCH64, 64, ByteOrder.LITTLE_ENDIAN, Architecture.isLOONGARCH64()),
+                Arguments.of("mips64", MIPS64, 64, ByteOrder.BIG_ENDIAN, Architecture.isMIPS64()),
                 Arguments.of("mips64el", MIPS64EL, 64, ByteOrder.LITTLE_ENDIAN, Architecture.isMIPS64EL()),
                 Arguments.of("mipsel", MIPSEL, 32, ByteOrder.LITTLE_ENDIAN, Architecture.isMIPSEL()),
                 Arguments.of("ppc", PPC, 32, ByteOrder.BIG_ENDIAN, Architecture.isPPC()),

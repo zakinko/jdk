@@ -41,6 +41,7 @@ public enum Architecture {
     ARM(32, ByteOrder.LITTLE_ENDIAN),
     LOONGARCH64(64, ByteOrder.LITTLE_ENDIAN),
     MIPSEL(32, ByteOrder.LITTLE_ENDIAN),
+    MIPS64(64, ByteOrder.BIG_ENDIAN),
     MIPS64EL(64, ByteOrder.LITTLE_ENDIAN),
     /*
      * An unknown architecture not specifically named.
@@ -202,6 +203,14 @@ public enum Architecture {
     @ForceInline
     public static boolean isMIPSEL() {
         return PlatformProps.TARGET_ARCH_IS_MIPSEL;
+    }
+
+    /**
+     * {@return {@code true} if the current architecture is MIPS64, big-endian}
+     */
+    @ForceInline
+    public static boolean isMIPS64() {
+        return PlatformProps.TARGET_ARCH_IS_MIPS64;
     }
 
     /**
