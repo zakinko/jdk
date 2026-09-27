@@ -61,6 +61,26 @@ cat > "$fixups" <<'H'
 #endif
 H
 
+# GNU ld only knows the architecture it was built for, so take the one
+# that matches the target rather than /usr/bin/ld.bfd, which is the
+# host's and rejects an aarch64 crt0.o as "file in wrong format".
+# Debian names the 32-bit x86 toolchain after i686, not after i386.
+# 32-bit arm is the one whose tuple does not end in -gnu, and 64-bit mips
+# is named after its ABI as well.
+gnu_ld() {
+  case "${triple%%-*}" in
+    i386)  gnu=i686-linux-gnu ;;
+    armv6|armv7) gnu=arm-linux-gnueabihf ;;
+    mips64|mips64el) gnu=${triple%%-*}-linux-gnuabi64 ;;
+    *)     gnu=${triple%%-*}-linux-gnu ;;
+  esac
+  ld_path=$(command -v "$gnu-ld.bfd" || true)
+  if [ -z "$ld_path" ]; then
+    echo "$0: no GNU ld for $gnu; install binutils-$gnu" >&2
+    exit 1
+  fi
+}
+
 # NetBSD and DragonFly ship libstdc++, and neither puts its headers where
 # clang looks by default.  NetBSD keeps them together under /usr/include/g++;
 # DragonFly splits them, with the headers proper under /usr/include/c++/<ver>
@@ -83,23 +103,7 @@ case "$os" in
     # flags-ldflags.m4 passes -- it produces the two segments NetBSD wants
     # and keeps the read-only relocations.  Measured on LLD 18.1.3 and GNU
     # ld 2.42.
-    # GNU ld only knows the architecture it was built for, so take the
-    # one that matches the target rather than /usr/bin/ld.bfd, which is
-    # the host's and rejects an aarch64 crt0.o as "file in wrong format".
-    # Debian names the 32-bit x86 toolchain after i686, not after i386.
-    # 32-bit arm is the one whose tuple does not end in -gnu.
-    # 64-bit mips is named after its ABI as well.
-    case "${triple%%-*}" in
-      i386)  gnu=i686-linux-gnu ;;
-      armv6|armv7) gnu=arm-linux-gnueabihf ;;
-      mips64|mips64el) gnu=${triple%%-*}-linux-gnuabi64 ;;
-      *)     gnu=${triple%%-*}-linux-gnu ;;
-    esac
-    ld_path=$(command -v "$gnu-ld.bfd" || true)
-    if [ -z "$ld_path" ]; then
-      echo "$0: no GNU ld for $gnu; install binutils-$gnu" >&2
-      exit 1
-    fi
+    gnu_ld
     # clang asks for NetBSD's own emulation on 32-bit arm, and Debian's ld
     # was built with only the Linux ones, so it stops at
     #   unrecognised emulation mode: armelf_nbsd_eabihf
@@ -190,6 +194,17 @@ W
     # for -fstack-protector itself, so the switch goes after its flags.
     case "$triple" in
       aarch64-*) late_extra="-fno-stack-protector" ;;
+    esac
+    # OpenBSD's mips64 ports still link their base system with GNU ld
+    # 2.17, and lld will not read the libc.so that comes out of it:
+    #   ld.lld: error: .../usr/lib/libc.so: invalid local symbol
+    #     '_libc_memcmp' in global part of symbol table
+    # 2.17 leaves local symbols after the first global one in .dynsym,
+    # which lld rejects outright and GNU ld reads.  So these link with
+    # Debian's GNU ld, as NetBSD does.  clang passes only -EB or -EL, which
+    # the Linux ld takes as they are.
+    case "$triple" in
+      mips64*) gnu_ld ;;
     esac
     ;;
   *)

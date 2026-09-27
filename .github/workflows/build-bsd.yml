@@ -109,7 +109,11 @@ jobs:
             v=$(echo '${{ matrix.llvm-suffix }}' | tr -d -)
             sudo apt-get install "clang-$v" "lld-$v" "llvm-$v"
           fi
-          if [ '${{ matrix.target-os }}' = netbsd ]; then
+          # OpenBSD's mips64 machines link with GNU ld too, since lld
+          # cannot read their libc.so.
+          if [ '${{ matrix.target-os }}' = netbsd ] ||
+             [ '${{ matrix.target-os }}-${{ matrix.arch }}' = openbsd-mips64 ] ||
+             [ '${{ matrix.target-os }}-${{ matrix.arch }}' = openbsd-mips64el ]; then
             case '${{ matrix.arch }}' in
               x86_64) gnu= ;;
               i386)   gnu=i686-linux-gnu ;;
