@@ -147,7 +147,10 @@ jobs:
 
   # A guest whose machine differs from the runner's is emulated, so the
   # aarch64 ones go on an arm64 runner; that runner has no /dev/kvm either,
-  # so they are emulated there too, only less so.
+  # so they are emulated there too, only less so -- slowly enough that the
+  # first NetBSD/aarch64 run lost ten tests to jtreg's timeout alone, eight
+  # of them gc/epsilon/TestInitAllocs at 480 seconds.  They get three times
+  # jtreg's default factor of four.
   #
   # Each machine is tested whether or not the others built: one that did not
   # fails at fetching its bundles, and the rest are not held back by it.
@@ -162,13 +165,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: netbsd,    arch: '',        platform: bsd-x86_64-netbsd,     release: '10.1',  runner: ubuntu-24.04}
-          - {os: freebsd,   arch: '',        platform: bsd-x86_64-freebsd,    release: '15.1',  runner: ubuntu-24.04}
-          - {os: openbsd,   arch: '',        platform: bsd-x86_64-openbsd,    release: '7.9',   runner: ubuntu-24.04}
-          - {os: dragonfly, arch: '',        platform: bsd-x86_64-dragonfly,  release: '6.4.2', runner: ubuntu-24.04}
-          - {os: netbsd,    arch: 'aarch64', platform: bsd-aarch64-netbsd,    release: '10.1',  runner: ubuntu-24.04-arm}
-          - {os: freebsd,   arch: 'aarch64', platform: bsd-aarch64-freebsd,   release: '15.1',  runner: ubuntu-24.04-arm}
-          - {os: openbsd,   arch: 'aarch64', platform: bsd-aarch64-openbsd,   release: '7.9',   runner: ubuntu-24.04-arm}
+          - {os: netbsd,    arch: '',        platform: bsd-x86_64-netbsd,     release: '10.1',  runner: ubuntu-24.04,     timeout-factor: '4'}
+          - {os: freebsd,   arch: '',        platform: bsd-x86_64-freebsd,    release: '15.1',  runner: ubuntu-24.04,     timeout-factor: '4'}
+          - {os: openbsd,   arch: '',        platform: bsd-x86_64-openbsd,    release: '7.9',   runner: ubuntu-24.04,     timeout-factor: '4'}
+          - {os: dragonfly, arch: '',        platform: bsd-x86_64-dragonfly,  release: '6.4.2', runner: ubuntu-24.04,     timeout-factor: '4'}
+          - {os: netbsd,    arch: 'aarch64', platform: bsd-aarch64-netbsd,    release: '10.1',  runner: ubuntu-24.04-arm, timeout-factor: '12'}
+          - {os: freebsd,   arch: 'aarch64', platform: bsd-aarch64-freebsd,   release: '15.1',  runner: ubuntu-24.04-arm, timeout-factor: '12'}
+          - {os: openbsd,   arch: 'aarch64', platform: bsd-aarch64-openbsd,   release: '7.9',   runner: ubuntu-24.04-arm, timeout-factor: '12'}
     uses: ./.github/workflows/test-bsd.yml
     with:
       target-os: ${{ matrix.os }}
@@ -176,3 +179,4 @@ jobs:
       arch: ${{ matrix.arch }}
       runner: ${{ matrix.runner }}
       release: ${{ matrix.release }}
+      timeout-factor: ${{ matrix.timeout-factor }}

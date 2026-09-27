@@ -140,7 +140,7 @@ gmake test-prebuilt $gnu \
   JT_HOME="$JT" \
   JDK_IMAGE_DIR="$JDK" \
   TEST_IMAGE_DIR="$TESTS" \
-  JTREG='JAVA_OPTIONS=-XX:-CreateCoredumpOnCrash;VERBOSE=fail,error,time;KEYWORDS=!headful'
+  JTREG="JAVA_OPTIONS=-XX:-CreateCoredumpOnCrash;VERBOSE=fail,error,time;KEYWORDS=!headful;TIMEOUT_FACTOR=${TIMEOUT_FACTOR:-4}"
 
 # make test-prebuilt prints "TEST FAILURE" and then returns 0: it reports
 # the failure as build/run-test-prebuilt/make-support/exit-with-error.
