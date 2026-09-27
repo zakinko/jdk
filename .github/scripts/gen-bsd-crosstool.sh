@@ -299,6 +299,13 @@ build_from_source() {
   rm -f "$src.tar.gz"
   (
     cd "$src"
+    # libffi knows MIPS on Linux, OpenBSD and FreeBSD and stops anywhere
+    # else with "libffi has not been ported to mips64-unknown-netbsd",
+    # although the code is the same.  pkgsrc patches NetBSD into the same
+    # line; so does this.  configure reads configure.host when it runs.
+    if [ "$name" = libffi ]; then
+      sed -i 's/mips\*-\*-openbsd\* |/mips*-*-openbsd* | mips*-*-netbsd* |/' configure.host
+    fi
     ./configure --host="$triple" --prefix="$prefix" \
         CC="$bindir/$triple-clang" AR="$bindir/$triple-ar" \
         RANLIB="$bindir/$triple-ranlib" STRIP="$bindir/$triple-strip" \
