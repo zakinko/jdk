@@ -213,28 +213,26 @@ for tool in ar ranlib strip objcopy nm objdump; do
   chmod +x "$bindir/$triple-$tool"
 done
 
-# 32-bit arm C++ calls __cxa_end_cleanup from every cleanup landing pad,
-# and NetBSD's test launcher NullCallerTest stopped at it as undefined.
-# Say which library in the sysroot defines it, so the link can name that
-# one.  Informational only; it goes to diagnostics.txt as well, which
-# build-bsd.yml prints again at the end of the job, where a log that is
-# read from its tail shows it.
+# NetBSD unwinds with DWARF CFI on 32-bit arm, not the ARM EHABI, and its
+# libraries carry no __cxa_end_cleanup: a sysroot search found it in none
+# of libstdc++, libsupc++, libgcc, libgcc_eh, libgcc_s or libc.  LLVM
+# nevertheless ended every C++ cleanup with a call to it on any *eabi*
+# triple, NetBSD's included, until Triple::isTargetEHABICompatible learnt
+# to leave NetBSD out -- and an executable with such a call does not link:
+#   undefined reference to `__cxa_end_cleanup'
+# while a shared library links and fails when it is loaded.  Compile one
+# cleanup here and stop now if this clang still does it, rather than at the
+# first C++ executable forty minutes into the build.
 case "$triple" in
   armv7-*netbsd*)
-    {
-      echo "--- who defines __cxa_end_cleanup ---"
-      for f in "$sysroot"/usr/lib/libstdc++.* "$sysroot"/usr/lib/libsupc++.* \
-               "$sysroot"/usr/lib/libgcc* "$sysroot"/usr/lib/libunwind* \
-               "$sysroot"/usr/lib/libc++abi* "$sysroot"/usr/lib/libc.so*; do
-        [ -f "$f" ] || continue
-        echo "  looked in ${f#$sysroot}"
-        if llvm-nm$llvm_suffix -g --defined-only "$f" 2>/dev/null |
-            grep -q ' __cxa_end_cleanup$'; then
-          echo "  defined in ${f#$sysroot}"
-        fi
-      done
-      echo "--- end ---"
-    } | tee -a "$bindir/diagnostics.txt"
+    printf 'struct S { ~S(); };\nvoid g();\nvoid f() { S s; g(); }\n' > "$bindir/eh-probe.cpp"
+    if "$bindir/$triple-clang++" -O2 -S -o - "$bindir/eh-probe.cpp" |
+        grep -q __cxa_end_cleanup; then
+      echo "$0: this clang ends C++ cleanups with __cxa_end_cleanup on" >&2
+      echo "$0: $triple, which NetBSD does not provide; use a newer LLVM" >&2
+      exit 1
+    fi
+    rm -f "$bindir/eh-probe.cpp"
     ;;
 esac
 
