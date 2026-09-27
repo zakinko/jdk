@@ -28,6 +28,17 @@
 
 #include "orderAccess_bsd_zero.hpp"
 
+// Where the machine has no 8-byte atomics at all -- 32-bit PowerPC -- no
+// alignment makes the 8-byte operations below lock-free, and clang says
+// so for every one of them (-Watomic-alignment) as it compiles them into
+// __atomic_*_8 calls.  That is expected there: atomic8_bsd_zero.cpp
+// defines those calls.
+#if defined(__clang__) && defined(__GCC_ATOMIC_LLONG_LOCK_FREE) && __GCC_ATOMIC_LLONG_LOCK_FREE < 2
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Watomic-alignment"
+#define BSD_ZERO_NO_ATOMIC8
+#endif
+
 // Implementation of class AtomicAccess
 
 // The 8-byte operations below go through an 8-byte aligned view of their
@@ -169,5 +180,10 @@ inline void AtomicAccess::PlatformStore<8>::operator()(T volatile* dest,
   STATIC_ASSERT(8 == sizeof(T));
   __atomic_store(bsd_zero_aligned8(dest), &store_value, __ATOMIC_RELAXED);
 }
+
+#ifdef BSD_ZERO_NO_ATOMIC8
+#pragma clang diagnostic pop
+#undef BSD_ZERO_NO_ATOMIC8
+#endif
 
 #endif // OS_CPU_BSD_ZERO_ATOMICACCESS_BSD_ZERO_HPP
