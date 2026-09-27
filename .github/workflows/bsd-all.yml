@@ -100,6 +100,7 @@ jobs:
           {"target-os":"netbsd","arch":"armv7",
            "target-triple":"armv7-unknown-netbsd-eabihf",
            "conf-name":"bsd-arm-netbsd",
+           "llvm-suffix":"-21",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
           {"target-os":"openbsd","arch":"armv7",
            "target-triple":"armv7-unknown-openbsd7.9",
