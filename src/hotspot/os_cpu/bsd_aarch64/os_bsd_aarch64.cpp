@@ -102,7 +102,7 @@ WXMode DefaultWXWriteMode;
 
 #ifdef __FreeBSD__
 # define context_x  uc_mcontext.mc_gpregs.gp_x
-# define context_fp context_x[REG_FP]
+# define context_fp uc_mcontext.mc_gpregs.gp_x[29]
 # define context_lr uc_mcontext.mc_gpregs.gp_lr
 # define context_sp uc_mcontext.mc_gpregs.gp_sp
 # define context_pc uc_mcontext.mc_gpregs.gp_elr
@@ -118,7 +118,7 @@ WXMode DefaultWXWriteMode;
 
 #ifdef __OpenBSD__
 # define context_x  sc_x
-# define context_fp sc_x[REG_FP]
+# define context_fp sc_x[29]
 # define context_lr sc_lr
 # define context_sp sc_sp
 # define context_pc sc_elr
