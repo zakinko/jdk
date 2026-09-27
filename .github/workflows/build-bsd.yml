@@ -219,6 +219,13 @@ jobs:
           echo "$seen shared objects, all with at most two PT_LOAD segments"
         if: inputs.dry-run == false && matrix.target-os == 'netbsd'
 
+      # What the cross toolchain step found out about the sysroot, printed
+      # again here because that step is thousands of lines above the end of
+      # the log, where a failed build is read from.
+      - name: 'Print the cross toolchain diagnostics'
+        run: cat cross-bin/diagnostics.txt 2>/dev/null || true
+        if: always()
+
       # The bundles are what a machine running the OS picks up to test with:
       # this runner cannot execute a line of what it just built.
       - name: 'Upload bundles'

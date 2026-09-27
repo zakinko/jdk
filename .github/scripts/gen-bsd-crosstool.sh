@@ -216,20 +216,25 @@ done
 # 32-bit arm C++ calls __cxa_end_cleanup from every cleanup landing pad,
 # and NetBSD's test launcher NullCallerTest stopped at it as undefined.
 # Say which library in the sysroot defines it, so the link can name that
-# one.  Informational only.
+# one.  Informational only; it goes to diagnostics.txt as well, which
+# build-bsd.yml prints again at the end of the job, where a log that is
+# read from its tail shows it.
 case "$triple" in
   armv7-*netbsd*)
-    echo "--- who defines __cxa_end_cleanup ---"
-    for f in "$sysroot"/usr/lib/libstdc++.* "$sysroot"/usr/lib/libsupc++.* \
-             "$sysroot"/usr/lib/libgcc* "$sysroot"/usr/lib/libunwind* \
-             "$sysroot"/usr/lib/libc++abi* "$sysroot"/usr/lib/libc.so*; do
-      [ -f "$f" ] || continue
-      if llvm-nm$llvm_suffix -g --defined-only "$f" 2>/dev/null |
-          grep -q ' __cxa_end_cleanup$'; then
-        echo "  defined in ${f#$sysroot}"
-      fi
-    done
-    echo "--- end ---"
+    {
+      echo "--- who defines __cxa_end_cleanup ---"
+      for f in "$sysroot"/usr/lib/libstdc++.* "$sysroot"/usr/lib/libsupc++.* \
+               "$sysroot"/usr/lib/libgcc* "$sysroot"/usr/lib/libunwind* \
+               "$sysroot"/usr/lib/libc++abi* "$sysroot"/usr/lib/libc.so*; do
+        [ -f "$f" ] || continue
+        echo "  looked in ${f#$sysroot}"
+        if llvm-nm$llvm_suffix -g --defined-only "$f" 2>/dev/null |
+            grep -q ' __cxa_end_cleanup$'; then
+          echo "  defined in ${f#$sysroot}"
+        fi
+      done
+      echo "--- end ---"
+    } | tee -a "$bindir/diagnostics.txt"
     ;;
 esac
 
