@@ -183,18 +183,18 @@ W
     # package, and whatever links against libjvm has to find it again.
     common_extra="-isystem $sysroot/usr/local/include -L$sysroot/usr/local/lib \
         -Wl,-rpath-link=$sysroot/usr/local/lib"
-    # Upstream LLVM cannot emit OpenBSD's stack protector on aarch64.
-    # OpenBSD keeps the canary in __guard_local rather than in
-    # __stack_chk_guard, and the aarch64 back end expands its
-    # LOAD_STACK_GUARD from a lookup of __stack_chk_guard alone, so every
-    # function that gets a canary crashes clang 18, 19 and 20 alike in
-    #   Running pass 'Post-RA pseudo instruction expansion pass'
-    # -- two lines of C with a char buffer are enough to show it.
-    # OpenBSD's own clang carries a local patch for this.  The JDK asks
-    # for -fstack-protector itself, so the switch goes after its flags.
+    # lld cannot leave an R_SPARC_64 for the run-time linker to resolve, so
+    # every vtable in libjvm stops the link with "relocation R_SPARC_64
+    # cannot be used against symbol ...; recompile with -fPIC".  OpenBSD's
+    # own sparc64 toolchain links with GNU ld, which emits them; do the same.
     case "$triple" in
-      aarch64-*) late_extra="-fno-stack-protector" ;;
-    esac
+      sparc64-*)
+        ld_path=$(command -v sparc64-linux-gnu-ld.bfd || true)
+        if [ -z "$ld_path" ]; then
+          echo "$0: no GNU ld for sparc64; install binutils-sparc64-linux-gnu" >&2
+          exit 1
+        fi
+        ;;
     # OpenBSD's mips64 ports still link their base system with GNU ld
     # 2.17, and lld will not read the libc.so that comes out of it:
     #   ld.lld: error: .../usr/lib/libc.so: invalid local symbol
@@ -203,7 +203,6 @@ W
     # which lld rejects outright and GNU ld reads.  So these link with
     # Debian's GNU ld, as NetBSD does.  clang passes only -EB or -EL, which
     # the Linux ld takes as they are.
-    case "$triple" in
       mips64*) gnu_ld ;;
     esac
     ;;
@@ -214,7 +213,6 @@ W
     ;;
 esac
 : "${common_extra:=}"
-: "${late_extra:=}"
 : "${ld_path:=}"
 if [ -n "$ld_path" ]; then ld_flag="--ld-path=$ld_path"; else ld_flag="-fuse-ld=lld"; fi
 
@@ -231,7 +229,7 @@ for tool in clang clang++; do
 exec /usr/bin/$tool$llvm_suffix --target=$triple --sysroot=$sysroot \\
   -Wno-unused-command-line-argument \\
   $rt_extra $ld_flag $common_extra $extra \\
-  -include $fixups "\$@" $late_extra $link_extra
+  -include $fixups "\$@" $link_extra
 W
   chmod +x "$bindir/$triple-$tool"
 done
@@ -248,20 +246,25 @@ done
 # 32-bit arm C++ calls __cxa_end_cleanup from every cleanup landing pad,
 # and NetBSD's test launcher NullCallerTest stopped at it as undefined.
 # Say which library in the sysroot defines it, so the link can name that
-# one.  Informational only.
+# one.  Informational only; it goes to diagnostics.txt as well, which
+# build-bsd.yml prints again at the end of the job, where a log that is
+# read from its tail shows it.
 case "$triple" in
   armv7-*netbsd*)
-    echo "--- who defines __cxa_end_cleanup ---"
-    for f in "$sysroot"/usr/lib/libstdc++.* "$sysroot"/usr/lib/libsupc++.* \
-             "$sysroot"/usr/lib/libgcc* "$sysroot"/usr/lib/libunwind* \
-             "$sysroot"/usr/lib/libc++abi* "$sysroot"/usr/lib/libc.so*; do
-      [ -f "$f" ] || continue
-      if llvm-nm$llvm_suffix -g --defined-only "$f" 2>/dev/null |
-          grep -q ' __cxa_end_cleanup$'; then
-        echo "  defined in ${f#$sysroot}"
-      fi
-    done
-    echo "--- end ---"
+    {
+      echo "--- who defines __cxa_end_cleanup ---"
+      for f in "$sysroot"/usr/lib/libstdc++.* "$sysroot"/usr/lib/libsupc++.* \
+               "$sysroot"/usr/lib/libgcc* "$sysroot"/usr/lib/libunwind* \
+               "$sysroot"/usr/lib/libc++abi* "$sysroot"/usr/lib/libc.so*; do
+        [ -f "$f" ] || continue
+        echo "  looked in ${f#$sysroot}"
+        if llvm-nm$llvm_suffix -g --defined-only "$f" 2>/dev/null |
+            grep -q ' __cxa_end_cleanup$'; then
+          echo "  defined in ${f#$sysroot}"
+        fi
+      done
+      echo "--- end ---"
+    } | tee -a "$bindir/diagnostics.txt"
     ;;
 esac
 

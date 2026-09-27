@@ -107,7 +107,16 @@ jobs:
           # post-RA pass on aarch64-unknown-openbsd.
           if [ -n '${{ matrix.llvm-suffix }}' ]; then
             v=$(echo '${{ matrix.llvm-suffix }}' | tr -d -)
-            sudo apt-get install "clang-$v" "lld-$v" "llvm-$v"
+            # A release Ubuntu does not carry comes from apt.llvm.org, whose
+            # script adds the repository and installs clang, lld and llvm.
+            if ! sudo apt-get install "clang-$v" "lld-$v" "llvm-$v"; then
+              wget -q https://apt.llvm.org/llvm.sh
+              sudo bash llvm.sh "$v"
+            fi
+          fi
+          # OpenBSD sparc64 links with GNU ld as well; see gen-bsd-crosstool.sh.
+          if [ '${{ matrix.target-os }}-${{ matrix.arch }}' = openbsd-sparc64 ]; then
+            sudo apt-get install binutils-sparc64-linux-gnu
           fi
           # OpenBSD's mips64 machines link with GNU ld too, since lld
           # cannot read their libc.so.
@@ -214,6 +223,13 @@ jobs:
           fi
           echo "$seen shared objects, all with at most two PT_LOAD segments"
         if: inputs.dry-run == false && matrix.target-os == 'netbsd'
+
+      # What the cross toolchain step found out about the sysroot, printed
+      # again here because that step is thousands of lines above the end of
+      # the log, where a failed build is read from.
+      - name: 'Print the cross toolchain diagnostics'
+        run: cat cross-bin/diagnostics.txt 2>/dev/null || true
+        if: always()
 
       # The bundles are what a machine running the OS picks up to test with:
       # this runner cannot execute a line of what it just built.

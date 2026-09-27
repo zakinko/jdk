@@ -38,6 +38,11 @@ on:
         required: false
         type: string
         default: ''
+      timeout-factor:
+        description: "jtreg's TIMEOUT_FACTOR; an emulated guest needs more"
+        required: false
+        type: string
+        default: '4'
       runner:
         description: 'The GitHub runner to boot the guest on'
         required: false
@@ -154,15 +159,22 @@ jobs:
           cpu: 4
           usesh: true
           copyback: true
-          envs: 'TEST_SUITE'
+          envs: 'TEST_SUITE TIMEOUT_FACTOR'
           # -U: the image carries some of these already, and pkg_add
           # refuses a newer version from the mirror without it -- "A
-          # different version of bash-5.3.20 is already installed".
+          # different version of bash-5.3.20 is already installed".  The
+          # mirror has also answered "no pkg found for 'zip'" to one part
+          # of twelve while the rest found it, so try a few times.
           prepare: |
-            /usr/sbin/pkg_add -U bash gmake zip unzip
+            n=0
+            until /usr/sbin/pkg_add -U bash gmake zip unzip; do
+              n=$((n + 1)); [ $n -lt 5 ] || exit 1
+              echo retrying in 30 seconds; sleep 30
+            done
           run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
+          TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
         if: inputs.target-os == 'netbsd'
 
       # jtreg's process tests read /proc, which FreeBSD does not mount.
@@ -175,13 +187,14 @@ jobs:
           cpu: 4
           usesh: true
           copyback: true
-          envs: 'TEST_SUITE'
+          envs: 'TEST_SUITE TIMEOUT_FACTOR'
           prepare: |
             mount -t procfs proc /proc
             pkg install -y bash gmake zip unzip gsed gnugrep
           run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
+          TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
         if: inputs.target-os == 'freebsd'
 
       # OpenBSD refuses a writable and executable mapping on a file system
@@ -196,7 +209,7 @@ jobs:
           cpu: 4
           usesh: true
           copyback: true
-          envs: 'TEST_SUITE'
+          envs: 'TEST_SUITE TIMEOUT_FACTOR'
           prepare: |
             mount -u -o wxallowed /home
             until pkg_add bash gmake zip unzip-- gsed ggrep libiconv; do
@@ -205,6 +218,7 @@ jobs:
           run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
+          TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
         if: inputs.target-os == 'openbsd'
 
       - name: 'Run tests in a DragonFly virtual machine'
@@ -215,12 +229,13 @@ jobs:
           cpu: 4
           usesh: true
           copyback: true
-          envs: 'TEST_SUITE'
+          envs: 'TEST_SUITE TIMEOUT_FACTOR'
           prepare: |
             pkg install -y bash gmake zip unzip gsed gnugrep
           run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
+          TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
         if: inputs.target-os == 'dragonfly'
 
       - name: 'Package test results'
