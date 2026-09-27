@@ -162,6 +162,19 @@ W
     # package, and whatever links against libjvm has to find it again.
     common_extra="-isystem $sysroot/usr/local/include -L$sysroot/usr/local/lib \
         -Wl,-rpath-link=$sysroot/usr/local/lib"
+    # lld cannot leave an R_SPARC_64 for the run-time linker to resolve, so
+    # every vtable in libjvm stops the link with "relocation R_SPARC_64
+    # cannot be used against symbol ...; recompile with -fPIC".  OpenBSD's
+    # own sparc64 toolchain links with GNU ld, which emits them; do the same.
+    case "$triple" in
+      sparc64-*)
+        ld_path=$(command -v sparc64-linux-gnu-ld.bfd || true)
+        if [ -z "$ld_path" ]; then
+          echo "$0: no GNU ld for sparc64; install binutils-sparc64-linux-gnu" >&2
+          exit 1
+        fi
+        ;;
+    esac
     ;;
   *)
     cxx_extra=""

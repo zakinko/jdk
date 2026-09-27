@@ -114,6 +114,10 @@ jobs:
               sudo bash llvm.sh "$v"
             fi
           fi
+          # OpenBSD sparc64 links with GNU ld as well; see gen-bsd-crosstool.sh.
+          if [ '${{ matrix.target-os }}-${{ matrix.arch }}' = openbsd-sparc64 ]; then
+            sudo apt-get install binutils-sparc64-linux-gnu
+          fi
           if [ '${{ matrix.target-os }}' = netbsd ]; then
             case '${{ matrix.arch }}' in
               x86_64) gnu= ;;
