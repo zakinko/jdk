@@ -41,6 +41,12 @@ on:
       - claude/bsd-zero-28
   workflow_dispatch:
 
+# The runners are shared with bsd-all.yml's tier1, which holds them for
+# hours; a run that a newer push has made stale only lengthens the queue.
+concurrency:
+  group: bsd-zero-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   hotspot-machines:
     name: hotspot-machines
