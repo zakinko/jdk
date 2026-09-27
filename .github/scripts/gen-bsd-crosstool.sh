@@ -254,7 +254,7 @@ done
 # cleanup here and stop now if this clang still does it, rather than at the
 # first C++ executable forty minutes into the build.
 case "$triple" in
-  armv7-*netbsd*)
+  armv6-*netbsd*|armv7-*netbsd*)
     printf 'struct S { ~S(); };\nvoid g();\nvoid f() { S s; g(); }\n' > "$bindir/eh-probe.cpp"
     if "$bindir/$triple-clang++" -O2 -S -o - "$bindir/eh-probe.cpp" |
         grep -q __cxa_end_cleanup; then

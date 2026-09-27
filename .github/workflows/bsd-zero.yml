@@ -143,6 +143,7 @@ jobs:
           {"target-os":"netbsd","arch":"armv6",
            "target-triple":"armv6-unknown-netbsd-eabihf",
            "conf-name":"bsd-armv6-netbsd",
+           "llvm-suffix":"-21",
            "extra-configure":"--with-libffi-include=$PWD/sysroot/usr/pkg/include --with-libffi-lib=$PWD/sysroot/usr/pkg/lib"},
           {"target-os":"netbsd","arch":"mips64",
            "target-triple":"mips64-unknown-netbsd",
