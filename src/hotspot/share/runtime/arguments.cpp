@@ -2837,8 +2837,9 @@ jint Arguments::parse_options_environment_variable(const char* name,
 }
 
 jint Arguments::parse_vm_options_file(const char* file_name, ScopedVMInitArgs* vm_args) {
-  // read file into buffer
-  int fd = ::open(file_name, O_RDONLY);
+  // read file into buffer.  os::open, not ::open: it refuses a directory,
+  // which some systems -- DragonFly among them -- will otherwise read.
+  int fd = os::open(file_name, O_RDONLY, 0);
   if (fd < 0) {
     jio_fprintf(defaultStream::error_stream(),
                 "Could not open options file '%s'\n",
