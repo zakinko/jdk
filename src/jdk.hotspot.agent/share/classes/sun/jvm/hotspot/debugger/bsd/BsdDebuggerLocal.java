@@ -421,9 +421,17 @@ public class BsdDebuggerLocal extends DebuggerBase implements BsdDebugger {
         return new BsdThread(this, threadIdAddr, uniqueThreadIdAddr);
     }
 
+    /** The remote debugger server asks for a thread by the address of its
+        OSThread's _thread_id alone.  Off macOS that id is also the one the
+        registers are fetched by -- set_unique_thread_id() copies it -- so
+        the thread can be made from it; macOS keeps a separate mach id,
+        which cannot be found from here. */
     @Override
     public ThreadProxy getThreadForIdentifierAddress(Address addr) {
-        throw new RuntimeException("unimplemented");
+        if (PlatformInfo.getOS().equals("darwin")) {
+            throw new RuntimeException("unimplemented");
+        }
+        return new BsdThread(this, addr.getCIntegerAt(0, 4, true));
     }
 
     /** From the ThreadAccess interface via Debugger and JVMDebugger */
