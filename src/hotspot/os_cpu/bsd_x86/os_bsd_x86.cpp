@@ -367,6 +367,13 @@ bool PosixSignals::pd_hotspot_signal_handler(int sig, siginfo_t* info,
       // Catching SIGBUS here prevents the implicit SIGBUS null check below from
       // being called, so only do so if the implicit null check is not necessary.
       } else if (sig == SIGBUS && !MacroAssembler::uses_implicit_null_check(info->si_addr)) {
+#elif defined(__DragonFly__)
+      // DragonFly's trap() turns every user page fault into SIGSEGV, so a
+      // read past the end of a truncated mapped file arrives as
+      // SIGSEGV/SEGV_ACCERR, never SIGBUS.  The protected page of an
+      // implicit null check gives SEGV_ACCERR too; leave that one alone.
+      } else if ((sig == SIGBUS || (sig == SIGSEGV && info->si_code == SEGV_ACCERR)) &&
+                 !MacroAssembler::uses_implicit_null_check(info->si_addr)) {
 #else
       } else if (sig == SIGBUS /* && info->si_code == BUS_OBJERR */) {
 #endif
@@ -422,7 +429,11 @@ bool PosixSignals::pd_hotspot_signal_handler(int sig, siginfo_t* info,
       }
     } else if ((thread->thread_state() == _thread_in_vm ||
                 thread->thread_state() == _thread_in_native) &&
+#ifdef __DragonFly__
+               (sig == SIGBUS || (sig == SIGSEGV && info->si_code == SEGV_ACCERR)) &&
+#else
                sig == SIGBUS && /* info->si_code == BUS_OBJERR && */
+#endif
                thread->doing_unsafe_access()) {
         address next_pc = Assembler::locate_next_instruction(pc);
         if (UnsafeMemoryAccess::contains_pc(pc)) {
