@@ -85,8 +85,13 @@ fi
 
 if [ "$os" = OpenBSD ]; then
   # The JVM reserves its heap and code cache up front, well past the
-  # default data size limit of a login class.
-  ulimit -Sd `ulimit -Hd`
+  # default data size limit of a login class.  Raising the soft limit to
+  # the hard one was not enough: the jdk parts that size the heap from the
+  # machine still stopped at
+  #   os::commit_memory(0x0000000781000000, 2130706432, 0) failed;
+  #   error='ENOMEM' (errno=12)
+  # The steps run as root, which may lift the hard limit too.
+  ulimit -d unlimited 2>/dev/null || ulimit -Sd `ulimit -Hd`
 fi
 
 # Build the smallest image jlink can make and start it.  Eight tier1 tests
@@ -127,6 +132,17 @@ ldd "$JDK/bin/java" 2>&1 | head -8
 echo "--- end ---"
 
 "$JDK/bin/java" -version
+
+# A cross build leaves out the default CDS archive -- jdk-options.m4 turns
+# --enable-cds-archive off for cross compilation, since the build cannot run
+# what it built -- and a JDK built on the BSD itself would carry one.  Dump
+# it here, as Images.gmk would have, so the tests that assume lib/server/
+# classes.jsa (NonJVMVariantLocation and TestCDSVMCrash start with
+# -Xshare:on) test the JDK a native build makes.  The VM has to be what
+# dumps it: the archive records the running JVM.
+"$JDK/bin/java" -Xshare:dump -XX:SharedArchiveFile="$JDK/lib/server/classes.jsa" \
+    -Xmx128M -Xms128M > "$PWD/cds-dump.log" 2>&1 ||
+  { echo "the default CDS archive could not be dumped:"; tail -20 "$PWD/cds-dump.log"; }
 
 # The makefiles are written for GNU sed and grep; where the base system's
 # are the BSD ones, the packaged GNU ones are named instead.
