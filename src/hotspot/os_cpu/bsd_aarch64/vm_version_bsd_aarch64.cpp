@@ -270,17 +270,26 @@ void VM_Version::get_os_cpu_info() {
 #define CPU_VAR(midr)   (((midr) >> 20) & 0xf)
 #define CPU_REV(midr)   (((midr) >> 0) & 0xf)
 
-// XXX: FreeBSD 15+ has sysarch(2) w/ARM64_GET_SVE_VL but the man page
-// says not to call sysarch(2) directly. A libsys function is not yet
-// available. When it does become available FreeBSD can call it instead
-// of using the minimum (128 bits/16 bytes) in the following two functions.
-
+// FreeBSD runs every thread at the kernel's largest SVE vector length --
+// sve_init() in sys/arm64/arm64/vfp.c sets ZCR_EL1 to ZCR_LEN_MASK -- and
+// offers no way to shorten it, so answer with the length RDVL reads.
+// Claiming the 16-byte minimum left C2's ptrue-governed code working on
+// lanes it did not know were there.  These are only reached once HWCAP_SVE
+// is set; OpenBSD gives userland no SVE, and keeps the minimum.
 int VM_Version::get_current_sve_vector_length() {
+#ifdef __FreeBSD__
+  uint64_t vl;
+  __asm__ volatile(".arch_extension sve\n\trdvl %0, #1\n\t.arch_extension nosve"
+                   : "=r"(vl));
+  return (int)vl;
+#else
   return FloatRegister::sve_vl_min;
+#endif
 }
 
+// The length cannot be changed; report the one in force.
 int VM_Version::set_and_get_current_sve_vector_length(int length) {
-  return FloatRegister::sve_vl_min;
+  return get_current_sve_vector_length();
 }
 
 #ifdef __OpenBSD__
