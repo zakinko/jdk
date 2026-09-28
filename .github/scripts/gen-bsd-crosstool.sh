@@ -153,6 +153,16 @@ W
     if [ -d "$sysroot/usr/pkg/lib" ]; then
       common_extra="-L$sysroot/usr/pkg/lib -Wl,-rpath-link=$sysroot/usr/pkg/lib"
     fi
+    # NetBSD's mips userland is soft-float: its crt0.o and libc pass
+    # floating-point values in integer registers, and the probe link
+    # below says so --
+    #   ld.bfd: warning: probe uses -msoft-float (set by .../crt0.o),
+    #     probe-82732e.o uses -mhard-float
+    # clang's default for the triple is hard-float, which links with that
+    # warning and then passes every double in the wrong register.
+    case "$triple" in
+      mips*) common_extra="${common_extra:-} -msoft-float" ;;
+    esac
     ;;
   dragonfly)
     cxxdir=$(ls -d "$sysroot"/usr/include/c++/*/ | sort -V | tail -1)
