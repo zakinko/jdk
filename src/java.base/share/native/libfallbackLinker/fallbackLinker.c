@@ -25,7 +25,17 @@
 
 #include "jdk_internal_foreign_abi_fallback_LibFallback.h"
 
+// libffi 3.5's ffitarget.h for PowerPC tests _CALL_ELF without asking
+// whether it is defined, which 32-bit PowerPC never does, and -Wundef
+// with -Werror stops the build there.  The header is libffi's.
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wundef"
+#endif
 #include <ffi.h>
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 #include <errno.h>
 #include <stdalign.h>
