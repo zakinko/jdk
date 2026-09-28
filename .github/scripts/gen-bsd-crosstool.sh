@@ -313,6 +313,10 @@ build_from_source() {
     # line; so does this.  configure reads configure.host when it runs.
     if [ "$name" = libffi ]; then
       sed -i 's/mips\*-\*-openbsd\* |/mips*-*-openbsd* | mips*-*-netbsd* |/' configure.host
+      # Its mips ffitarget.h reads the ABI macros from <sgidefs.h>
+      # everywhere but the systems whose compilers predefine them, and
+      # NetBSD has no such header -- clang predefines them there too.
+      sed -i 's/!defined(__FreeBSD__) \&\& /!defined(__FreeBSD__) \&\& !defined(__NetBSD__) \&\& /' src/mips/ffitarget.h
     fi
     ./configure --host="$triple" --prefix="$prefix" \
         CC="$bindir/$triple-clang" AR="$bindir/$triple-ar" \
