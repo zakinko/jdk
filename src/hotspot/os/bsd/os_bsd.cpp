@@ -1984,6 +1984,23 @@ bool os::pd_uncommit_memory(char* addr, size_t size, bool exec) {
     }
     return true;
   }
+#elif defined(__DragonFly__)
+  // DragonFly's mmap(MAP_FIXED) is not a replace in place: it checks the new
+  // range against RLIMIT_VMEM before the old one is removed, and removes and
+  // inserts under separate map locks, where another thread's mmap can take
+  // the hole.  Either way the uncommit failed, and os::uncommit_memory
+  // stops the VM with "Failed to uncommit" (GetLockOwnerName, in tier1).
+  // Take the pages away and the access with them instead;
+  // pd_commit_memory maps fresh zero-filled pages over the range again.
+  if (::mprotect(addr, size, PROT_NONE) != 0 ||
+      ::madvise(addr, size, MADV_FREE) != 0) {
+    ErrnoPreserver ep;
+    log_trace(os, map)("mprotect/madvise failed: " RANGEFMT " errno=(%s)",
+                       RANGEFMTARGS(addr, size),
+                       os::strerror(ep.saved_errno()));
+    return false;
+  }
+  return true;
 #else
   uintptr_t res = (uintptr_t) ::mmap(addr, size, PROT_NONE,
                                      MAP_PRIVATE|MAP_FIXED|MAP_NORESERVE|MAP_ANONYMOUS, -1, 0);
