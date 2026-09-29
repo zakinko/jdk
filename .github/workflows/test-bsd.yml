@@ -137,6 +137,15 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
 
+      # The VM actions copy the whole workspace into the guest, and the
+      # tests use none of the symbols bundle.  FreeBSD aarch64's copy failed
+      # on it with "bundles/symbols/jdk-28/lib/server/libjvm.debuginfo failed
+      # verification -- update discarded" and rsync's exit code 23, before a
+      # test ran.  The archives the bundles were unpacked from are not
+      # needed there either.
+      - name: 'Leave the symbols and the archives out of the guest'
+        run: rm -rf bundles/symbols bundles/*.tar.gz
+
       # Whether the guest is accelerated decides whether a six-hour job is
       # enough, and it is easy to get wrong: qemu lists kvm under -accel
       # help when the binary was built with it, which says nothing about
