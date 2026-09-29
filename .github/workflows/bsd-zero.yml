@@ -40,6 +40,14 @@ on:
     branches:
       - claude/bsd-zero-28
   workflow_dispatch:
+    inputs:
+      group:
+        description: >-
+          Build one group alone (hotspot-machines, freebsd, openbsd or
+          netbsd) rather than all four; empty builds them all.
+        required: false
+        type: string
+        default: ''
 
 # The runners are shared with bsd-all.yml's tier1, which holds them for
 # hours; a run that a newer push has made stale only lengthens the queue.
@@ -50,6 +58,7 @@ concurrency:
 jobs:
   hotspot-machines:
     name: hotspot-machines
+    if: ${{ inputs.group == '' || inputs.group == 'hotspot-machines' }}
     uses: ./.github/workflows/build-bsd.yml
     with:
       extra-conf-options: '--with-jvm-variants=zero'
@@ -87,6 +96,7 @@ jobs:
 
   freebsd:
     name: freebsd
+    if: ${{ inputs.group == '' || inputs.group == 'freebsd' }}
     uses: ./.github/workflows/build-bsd.yml
     with:
       extra-conf-options: '--with-jvm-variants=zero'
@@ -107,6 +117,7 @@ jobs:
 
   openbsd:
     name: openbsd
+    if: ${{ inputs.group == '' || inputs.group == 'openbsd' }}
     uses: ./.github/workflows/build-bsd.yml
     with:
       extra-conf-options: '--with-jvm-variants=zero'
@@ -131,6 +142,7 @@ jobs:
 
   netbsd:
     name: netbsd
+    if: ${{ inputs.group == '' || inputs.group == 'netbsd' }}
     uses: ./.github/workflows/build-bsd.yml
     with:
       extra-conf-options: '--with-jvm-variants=zero'
