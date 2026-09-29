@@ -1269,6 +1269,20 @@ bool os::dll_address_to_library_name(address addr, char* buf,
 // in case of error it checks if .dll/.so was built for the
 // same architecture as Hotspot is running on
 
+#ifdef __DragonFly__
+// DragonFly's dlclose() lets go of the run-time linker's lock while it runs
+// the object's fini functions, and afterwards unloads it on the strength of
+// the reference count it read before -- which a dlopen() of the same object
+// on another thread has raised in the meantime.  The process then stops in
+//   ld-elf.so.2: assert failed: .../libexec/rtld-elf/rtld.c:4345
+// which is unload_object()'s assert(root->refcount == 0); this is the
+// java/foreign/LibraryLookupTest in tier1, which loads and unloads one
+// library from several threads.  DragonFly's master branch still has the
+// same dlclose().  Keep the VM's own dlopen and dlclose calls from
+// overlapping.
+static pthread_mutex_t dragonfly_dl_lock = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
 static void *dlopen_helper(const char *filename, char *ebuf, int ebuflen) {
   bool ieee_handling = IEEE_subnormal_handling_OK();
   if (!ieee_handling) {
@@ -1300,7 +1314,13 @@ static void *dlopen_helper(const char *filename, char *ebuf, int ebuflen) {
 
   void* result;
   JFR_ONLY(NativeLibraryLoadEvent load_event(filename, &result);)
+#ifdef __DragonFly__
+  pthread_mutex_lock(&dragonfly_dl_lock);
+#endif
   result = ::dlopen(filename, RTLD_LAZY);
+#ifdef __DragonFly__
+  pthread_mutex_unlock(&dragonfly_dl_lock);
+#endif
   if (result == nullptr) {
     const char* error_report = ::dlerror();
     if (error_report == nullptr) {
@@ -3118,7 +3138,13 @@ bool os::pd_dll_unload(void* libhandle, char* ebuf, int ebuflen) {
     ebuf[ebuflen - 1] = '\0';
   }
 
+#ifdef __DragonFly__
+  pthread_mutex_lock(&dragonfly_dl_lock);
+#endif
   bool res = (0 == ::dlclose(libhandle));
+#ifdef __DragonFly__
+  pthread_mutex_unlock(&dragonfly_dl_lock);
+#endif
   if (!res) {
     // error analysis when dlopen fails
     const char* error_report = ::dlerror();
