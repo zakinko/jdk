@@ -200,6 +200,11 @@ if [ -f $R/make-support/exit-with-error ]; then
       echo "--- $t ---"
       grep -E 'Exception|Error|FAILED|failed|expected|timed out|^TEST RESULT' "$jtr" |
         grep -v '^[[:space:]]*at ' | head -15
+      # A VM that exits without a word ("Unexpected exit from test [exit
+      # code: 1]") leaves nothing for the pattern above; its own output is
+      # then the only lead.
+      sed -n '/^----------System.err/,/^----------rerun/p' "$jtr" |
+        grep -v '^[[:space:]]*at ' | tail -12
     done
   # A crash names only its problematic frame on the console; what faulted
   # and where is in the hs_err file, which otherwise has to be fetched from
