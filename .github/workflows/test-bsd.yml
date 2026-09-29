@@ -164,12 +164,19 @@ jobs:
           # refuses a newer version from the mirror without it -- "A
           # different version of bash-5.3.20 is already installed".  The
           # mirror has also answered "no pkg found for 'zip'" to one part
-          # of twelve while the rest found it, so try a few times.
+          # of twelve while the rest found it, so try a few times.  Five
+          # tries at the CDN, half an hour apart in all, still ended in
+          # "no pkg found for 'gmake'" on one part, so alternate with the
+          # master site, which the CDN only fronts.
           prepare: |
+            case `uname -m` in evbarm) a=aarch64 ;; *) a=`uname -m` ;; esac
+            p=pub/pkgsrc/packages/NetBSD/$a/`uname -r`/All
             n=0
             until /usr/sbin/pkg_add -U bash gmake zip unzip; do
-              n=$((n + 1)); [ $n -lt 5 ] || exit 1
-              echo retrying in 30 seconds; sleep 30
+              n=$((n + 1)); [ $n -lt 6 ] || exit 1
+              if [ $((n % 2)) = 1 ]; then h=ftp.NetBSD.org; else h=cdn.NetBSD.org; fi
+              PKG_PATH=http://$h/$p; export PKG_PATH
+              echo "retrying from $PKG_PATH in 30 seconds"; sleep 30
             done
           run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
         env:

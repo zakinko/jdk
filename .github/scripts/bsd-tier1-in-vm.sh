@@ -173,10 +173,15 @@ if [ -f $R/make-support/exit-with-error ]; then
   # fetched, so the reason would otherwise be out of reach.
   cat $R/test-results/*/text/newfailures.txt \
       $R/test-results/*/text/other_errors.txt 2>/dev/null |
-    grep -v '^#' | sed 's/[#].*//' | sort -u | head -40 |
+    grep -v '^#' | sed 's/[[:space:]].*//' | sort -u | head -40 |
     while read t; do
       [ -n "$t" ] || continue
-      jtr=`find $R/test-support -path "*/${t%.*}*.jtr" 2>/dev/null | head -1`
+      # A test with several @test blocks is named Foo.java#id, and jtreg
+      # writes each variant to Foo_id.jtr; matching on Foo alone picks up
+      # whichever variant find meets first, often not the one that failed.
+      f=${t%%#*}
+      case "$t" in *#*) f="${f%.*}_${t#*#}" ;; *) f="${f%.*}" ;; esac
+      jtr=`find $R/test-support -path "*/$f.jtr" 2>/dev/null | head -1`
       [ -n "$jtr" ] || continue
       echo "--- $t ---"
       grep -E 'Exception|Error|FAILED|failed|expected|timed out|^TEST RESULT' "$jtr" |
