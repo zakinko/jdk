@@ -2022,9 +2022,14 @@ bool os::pd_uncommit_memory(char* addr, size_t size, bool exec) {
   }
   {
     ErrnoPreserver ep;
-    log_info(os, map)("mmap failed, uncommitting in place: " RANGEFMT " errno=(%s)",
-                      RANGEFMTARGS(addr, size),
-                      os::strerror(ep.saved_errno()));
+    log_trace(os, map)("mmap failed: " RANGEFMT " errno=(%s)",
+                       RANGEFMTARGS(addr, size),
+                       os::strerror(ep.saved_errno()));
+    // A range mprotect would refuse as well; say so as the others do
+    // (TestMemoryAllocationLogging#testUncommitFailed asks for it).
+    if (ep.saved_errno() == EINVAL) {
+      return false;
+    }
   }
   if (::mprotect(addr, size, PROT_NONE) != 0 ||
       ::madvise(addr, size, MADV_FREE) != 0) {
