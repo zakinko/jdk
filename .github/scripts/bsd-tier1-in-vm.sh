@@ -83,6 +83,20 @@ if [ "$os" = NetBSD ]; then
   rm -rf "$WORK"
 fi
 
+if [ "$os" = DragonFly ]; then
+  # The image's root is HAMMER2, which keeps a truncated file's last 64K
+  # buffer in memory, so a mapping of the part cut off still reads, where
+  # every other file system raises SIGBUS.  runtime/Unsafe/InternalErrorTest
+  # ("InternalError not thrown") and java/foreign/sharedclosejfr/
+  # TestSharedCloseJFR ("InternalError was expected") test for exactly that
+  # fault, and tools/javac/6394683/T6394683 stops at "Cannot create files"
+  # on the same file system.  The tests work in build/, so put that on
+  # tmpfs, which behaves as the tests expect.
+  mkdir -p build
+  mount_tmpfs tmpfs build ||
+    echo "could not put build/ on tmpfs; the tests run on HAMMER2"
+fi
+
 if [ "$os" = OpenBSD ]; then
   # The JVM reserves its heap and code cache up front, well past the
   # default data size limit of a login class.  Raising the soft limit to
