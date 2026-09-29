@@ -187,6 +187,16 @@ if [ -f $R/make-support/exit-with-error ]; then
       grep -E 'Exception|Error|FAILED|failed|expected|timed out|^TEST RESULT' "$jtr" |
         grep -v '^[[:space:]]*at ' | head -15
     done
+  # A crash names only its problematic frame on the console; what faulted
+  # and where is in the hs_err file, which otherwise has to be fetched from
+  # the artifact.  A gtest crash leaves nothing else to go on.
+  find $R/test-support -name 'hs_err_pid*.log' 2>/dev/null | head -4 |
+    while read e; do
+      echo "--- ${e#$R/test-support/} ---"
+      grep -m1 -A1 '^siginfo:' "$e"
+      sed -n '/^Registers:/,/^$/p' "$e" | head -24
+      sed -n '/^Native frames:/,/^$/p' "$e" | head -16
+    done
   echo "--- end ---"
 fi
 exit 0
