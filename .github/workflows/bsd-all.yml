@@ -166,13 +166,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {os: netbsd,    arch: '',        platform: bsd-x86_64-netbsd,     release: '10.1',  runner: ubuntu-24.04,     timeout-factor: '4'}
-          - {os: freebsd,   arch: '',        platform: bsd-x86_64-freebsd,    release: '15.1',  runner: ubuntu-24.04,     timeout-factor: '4'}
-          - {os: openbsd,   arch: '',        platform: bsd-x86_64-openbsd,    release: '7.9',   runner: ubuntu-24.04,     timeout-factor: '4'}
-          - {os: dragonfly, arch: '',        platform: bsd-x86_64-dragonfly,  release: '6.4.2', runner: ubuntu-24.04,     timeout-factor: '4'}
-          - {os: netbsd,    arch: 'aarch64', platform: bsd-aarch64-netbsd,    release: '10.1',  runner: ubuntu-24.04-arm, timeout-factor: '12'}
-          - {os: freebsd,   arch: 'aarch64', platform: bsd-aarch64-freebsd,   release: '15.1',  runner: ubuntu-24.04-arm, timeout-factor: '12'}
-          - {os: openbsd,   arch: 'aarch64', platform: bsd-aarch64-openbsd,   release: '7.9',   runner: ubuntu-24.04-arm, timeout-factor: '12'}
+          - {os: netbsd,    arch: '',        platform: bsd-x86_64-netbsd,     release: '10.1',  runner: ubuntu-24.04,     timeout-factor: '4',  shards: '[1]',     shard-count: '1'}
+          - {os: freebsd,   arch: '',        platform: bsd-x86_64-freebsd,    release: '15.1',  runner: ubuntu-24.04,     timeout-factor: '4',  shards: '[1]',     shard-count: '1'}
+          - {os: openbsd,   arch: '',        platform: bsd-x86_64-openbsd,    release: '7.9',   runner: ubuntu-24.04,     timeout-factor: '4',  shards: '[1]',     shard-count: '1'}
+          - {os: dragonfly, arch: '',        platform: bsd-x86_64-dragonfly,  release: '6.4.2', runner: ubuntu-24.04,     timeout-factor: '4',  shards: '[1]',     shard-count: '1'}
+          - {os: netbsd,    arch: 'aarch64', platform: bsd-aarch64-netbsd,    release: '10.1',  runner: ubuntu-24.04-arm, timeout-factor: '12', shards: '[1,2,3]', shard-count: '3'}
+          - {os: freebsd,   arch: 'aarch64', platform: bsd-aarch64-freebsd,   release: '15.1',  runner: ubuntu-24.04-arm, timeout-factor: '12', shards: '[1,2,3]', shard-count: '3'}
+          - {os: openbsd,   arch: 'aarch64', platform: bsd-aarch64-openbsd,   release: '7.9',   runner: ubuntu-24.04-arm, timeout-factor: '12', shards: '[1,2,3]', shard-count: '3'}
     uses: ./.github/workflows/test-bsd.yml
     with:
       target-os: ${{ matrix.os }}
@@ -181,3 +181,5 @@ jobs:
       runner: ${{ matrix.runner }}
       release: ${{ matrix.release }}
       timeout-factor: ${{ matrix.timeout-factor }}
+      shards: ${{ matrix.shards }}
+      shard-count: ${{ matrix.shard-count }}

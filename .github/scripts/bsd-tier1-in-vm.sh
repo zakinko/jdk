@@ -164,13 +164,38 @@ gnu=""
 if command -v gsed >/dev/null 2>&1; then gnu="$gnu SED=`command -v gsed`"; fi
 if command -v ggrep >/dev/null 2>&1; then gnu="$gnu GREP=`command -v ggrep`"; fi
 
+# A part split across SHARDS jobs runs every SHARDS-th test file of it,
+# starting at the SHARD-th, and leaves the rest to the other jobs by listing
+# them as problems.  jtreg -l names the tests the part selects, after the
+# keywords and @requires, so the split is of what would really run.
+extra=""
+if [ "${SHARDS:-1}" -gt 1 ]; then
+  root=${suite%%:*}
+  "$JDK/bin/java" -jar "$JT/lib/jtreg.jar" -l -jdk:"$JDK" -k:'!headful' \
+      "$PWD/${root%/}:${suite#*:}" > "$PWD/shard-all.txt" 2>&1 || :
+  grep -E '\.(java|sh|html)(#.*)?$' "$PWD/shard-all.txt" | sed 's/#.*//' |
+    sort -u > "$PWD/shard-files.txt"
+  n=`wc -l < "$PWD/shard-files.txt"`
+  if [ "$n" -gt 0 ]; then
+    awk -v k="$SHARD" -v n="$SHARDS" \
+        '(NR - 1) % n != k - 1 { print $0 " 0000000 generic-all" }' \
+        "$PWD/shard-files.txt" > "$PWD/shard-exclude.txt"
+    m=`wc -l < "$PWD/shard-exclude.txt"`
+    echo "shard $SHARD of $SHARDS: `expr $n - $m` of $n test files"
+    extra=";EXTRA_PROBLEM_LISTS=$PWD/shard-exclude.txt"
+  else
+    echo "could not list the tests of $suite, so running all of them; jtreg said:"
+    tail -5 "$PWD/shard-all.txt"
+  fi
+fi
+
 gmake test-prebuilt $gnu \
   TEST="$suite" \
   BOOT_JDK="$JDK" \
   JT_HOME="$JT" \
   JDK_IMAGE_DIR="$JDK" \
   TEST_IMAGE_DIR="$TESTS" \
-  JTREG="JAVA_OPTIONS=-XX:-CreateCoredumpOnCrash;VERBOSE=fail,error,time;KEYWORDS=!headful;TIMEOUT_FACTOR=${TIMEOUT_FACTOR:-4}"
+  JTREG="JAVA_OPTIONS=-XX:-CreateCoredumpOnCrash;VERBOSE=fail,error,time;KEYWORDS=!headful;TIMEOUT_FACTOR=${TIMEOUT_FACTOR:-4}$extra"
 
 # make test-prebuilt prints "TEST FAILURE" and then returns 0: it reports
 # the failure as build/run-test-prebuilt/make-support/exit-with-error.
