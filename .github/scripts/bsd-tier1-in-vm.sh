@@ -146,6 +146,11 @@ ldd "$JDK/bin/java" 2>&1 | head -8
 echo "--- end ---"
 
 "$JDK/bin/java" -version
+# The vector length C2 sizes its code for, read on this machine.  FreeBSD
+# runs every thread at the largest length the CPU offers, and under QEMU
+# that can be up to 256 bytes, where Linux starts a thread at 64.
+"$JDK/bin/java" -XX:+PrintFlagsFinal -version 2>/dev/null |
+  grep -E ' (UseSVE|MaxVectorSize|UseSIMDForMemoryOps|UseAVX) ' || :
 
 # A cross build leaves out the default CDS archive -- jdk-options.m4 turns
 # --enable-cds-archive off for cross compilation, since the build cannot run
