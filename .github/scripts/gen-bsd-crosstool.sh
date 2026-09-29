@@ -317,6 +317,21 @@ build_from_source() {
       # everywhere but the systems whose compilers predefine them, and
       # NetBSD has no such header -- clang predefines them there too.
       sed -i 's/!defined(__FreeBSD__) \&\& /!defined(__FreeBSD__) \&\& !defined(__NetBSD__) \&\& /' src/mips/ffitarget.h
+      # And its mips ffi.c flushes the trampoline's instruction cache with
+      # cacheflush() from <sys/cachectl.h> unless the compiler says it is
+      # gcc 4.3 or later -- clang says 4.2 -- and NetBSD keeps that
+      # function's header under mips/.  Name the header the sysroot has,
+      # or failing that take the compiler builtin.
+      for h in mips/cachectl.h machine/cachectl.h; do
+        if [ -f "$sysroot/usr/include/$h" ]; then
+          sed -i "s|#    include <sys/cachectl.h>|#    include <$h>|" src/mips/ffi.c
+          break
+        fi
+      done
+      if grep -q 'include <sys/cachectl.h>' src/mips/ffi.c &&
+         [ ! -f "$sysroot/usr/include/sys/cachectl.h" ]; then
+        sed -i 's|^#ifndef USE__BUILTIN___CLEAR_CACHE$|#define USE__BUILTIN___CLEAR_CACHE 1\n&|' src/mips/ffi.c
+      fi
     fi
     ./configure --host="$triple" --prefix="$prefix" \
         CC="$bindir/$triple-clang" AR="$bindir/$triple-ar" \
