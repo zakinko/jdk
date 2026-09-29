@@ -83,6 +83,20 @@ if [ "$os" = NetBSD ]; then
   rm -rf "$WORK"
 fi
 
+if [ "$os" = DragonFly ]; then
+  # The image's root is HAMMER2, which keeps a truncated file's last 64K
+  # buffer in memory, so a mapping of the part cut off still reads, where
+  # every other file system raises SIGBUS.  runtime/Unsafe/InternalErrorTest
+  # ("InternalError not thrown") and java/foreign/sharedclosejfr/
+  # TestSharedCloseJFR ("InternalError was expected") test for exactly that
+  # fault, and tools/javac/6394683/T6394683 stops at "Cannot create files"
+  # on the same file system.  The tests work in build/, so put that on
+  # tmpfs, which behaves as the tests expect.
+  mkdir -p build
+  mount_tmpfs tmpfs build ||
+    echo "could not put build/ on tmpfs; the tests run on HAMMER2"
+fi
+
 if [ "$os" = OpenBSD ]; then
   # The JVM reserves its heap and code cache up front, well past the
   # default data size limit of a login class.  Raising the soft limit to
@@ -186,6 +200,21 @@ if [ -f $R/make-support/exit-with-error ]; then
       echo "--- $t ---"
       grep -E 'Exception|Error|FAILED|failed|expected|timed out|^TEST RESULT' "$jtr" |
         grep -v '^[[:space:]]*at ' | head -15
+      # A VM that exits without a word ("Unexpected exit from test [exit
+      # code: 1]") leaves nothing for the pattern above; its own output is
+      # then the only lead.
+      sed -n '/^----------System.err/,/^----------rerun/p' "$jtr" |
+        grep -v '^[[:space:]]*at ' | tail -12
+    done
+  # A crash names only its problematic frame on the console; what faulted
+  # and where is in the hs_err file, which otherwise has to be fetched from
+  # the artifact.  A gtest crash leaves nothing else to go on.
+  find $R/test-support -name 'hs_err_pid*.log' 2>/dev/null | head -4 |
+    while read e; do
+      echo "--- ${e#$R/test-support/} ---"
+      grep -m1 -A1 '^siginfo:' "$e"
+      sed -n '/^Registers:/,/^$/p' "$e" | head -24
+      sed -n '/^Native frames:/,/^$/p' "$e" | head -16
     done
   echo "--- end ---"
 fi
