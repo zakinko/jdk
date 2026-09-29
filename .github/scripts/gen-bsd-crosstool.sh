@@ -328,6 +328,14 @@ build_from_source() {
           break
         fi
       done
+      # NetBSD's header declares cacheflush(), but its libc defines only
+      # _cacheflush(), a sysarch(MIPS_CACHEFLUSH) wrapper
+      # (lib/libc/arch/mips/gen/cacheflush.c), and a libffi.so that
+      # calls the former does not link:
+      #   libffi.so: undefined reference to `cacheflush'
+      if [ "$os" = netbsd ]; then
+        sed -i 's/^  cacheflush (/  _cacheflush (/' src/mips/ffi.c
+      fi
       if grep -q 'include <sys/cachectl.h>' src/mips/ffi.c &&
          [ ! -f "$sysroot/usr/include/sys/cachectl.h" ]; then
         sed -i 's|^#ifndef USE__BUILTIN___CLEAR_CACHE$|#define USE__BUILTIN___CLEAR_CACHE 1\n&|' src/mips/ffi.c
