@@ -182,14 +182,19 @@ if [ "${SHARDS:-1}" -gt 1 ]; then
   root=${suite%%:*}
   "$JDK/bin/java" -jar "$JT/lib/jtreg.jar" -l -jdk:"$JDK" -k:'!headful' \
       "$PWD/${root%/}:${suite#*:}" > "$PWD/shard-all.txt" 2>&1 || :
-  grep -E '\.(java|sh|html)(#.*)?$' "$PWD/shard-all.txt" | sed 's/#.*//' |
-    sort -u > "$PWD/shard-files.txt"
+  grep -E '\.(java|sh|html)(#.*)?$' "$PWD/shard-all.txt" |
+    sort -u > "$PWD/shard-tests.txt"
+  sed 's/#.*//' "$PWD/shard-tests.txt" | sort -u > "$PWD/shard-files.txt"
   n=`wc -l < "$PWD/shard-files.txt"`
   if [ "$n" -gt 0 ]; then
-    awk -v k="$SHARD" -v n="$SHARDS" \
-        '(NR - 1) % n != k - 1 { print $0 " 0000000 generic-all" }' \
-        "$PWD/shard-files.txt" > "$PWD/shard-exclude.txt"
-    m=`wc -l < "$PWD/shard-exclude.txt"`
+    # Split by file, so the variants of one test stay together, but list
+    # every variant to exclude by its own name: an entry for Foo.java does
+    # not exclude Foo.java#id, and the variants ran in every shard.
+    awk -v k="$SHARD" -v n="$SHARDS" '
+        NR == FNR { mine[$0] = ((FNR - 1) % n == k - 1); next }
+        { f = $0; sub(/#.*/, "", f); if (!mine[f]) print $0 " 0000000 generic-all" }' \
+        "$PWD/shard-files.txt" "$PWD/shard-tests.txt" > "$PWD/shard-exclude.txt"
+    m=`sed 's/#.*//' "$PWD/shard-exclude.txt" | sort -u | wc -l`
     echo "shard $SHARD of $SHARDS: `expr $n - $m` of $n test files" | tee -a "$PWD/setup.txt"
     extra=";EXTRA_PROBLEM_LISTS=$PWD/shard-exclude.txt"
   else
