@@ -93,8 +93,11 @@ if [ "$os" = DragonFly ]; then
   # on the same file system.  The tests work in build/, so put that on
   # tmpfs, which behaves as the tests expect.
   mkdir -p build
-  mount_tmpfs tmpfs build ||
-    echo "could not put build/ on tmpfs; the tests run on HAMMER2"
+  if mount_tmpfs tmpfs build; then
+    echo "build/ is on tmpfs" >> "$PWD/setup.txt"
+  else
+    echo "could not put build/ on tmpfs; the tests run on HAMMER2" | tee -a "$PWD/setup.txt"
+  fi
 fi
 
 if [ "$os" = OpenBSD ]; then
@@ -150,7 +153,8 @@ echo "--- end ---"
 # runs every thread at the largest length the CPU offers, and under QEMU
 # that can be up to 256 bytes, where Linux starts a thread at 64.
 "$JDK/bin/java" -XX:+PrintFlagsFinal -version 2>/dev/null |
-  grep -E ' (UseSVE|MaxVectorSize|UseSIMDForMemoryOps|UseAVX) ' || :
+  grep -E ' (UseSVE|MaxVectorSize|UseSIMDForMemoryOps|UseAVX) ' |
+  tee -a "$PWD/setup.txt" || :
 
 # A cross build leaves out the default CDS archive -- jdk-options.m4 turns
 # --enable-cds-archive off for cross compilation, since the build cannot run
@@ -186,11 +190,11 @@ if [ "${SHARDS:-1}" -gt 1 ]; then
         '(NR - 1) % n != k - 1 { print $0 " 0000000 generic-all" }' \
         "$PWD/shard-files.txt" > "$PWD/shard-exclude.txt"
     m=`wc -l < "$PWD/shard-exclude.txt"`
-    echo "shard $SHARD of $SHARDS: `expr $n - $m` of $n test files"
+    echo "shard $SHARD of $SHARDS: `expr $n - $m` of $n test files" | tee -a "$PWD/setup.txt"
     extra=";EXTRA_PROBLEM_LISTS=$PWD/shard-exclude.txt"
   else
-    echo "could not list the tests of $suite, so running all of them; jtreg said:"
-    tail -5 "$PWD/shard-all.txt"
+    { echo "could not list the tests of $suite, so running all of them; jtreg said:"
+      tail -5 "$PWD/shard-all.txt"; } | tee -a "$PWD/setup.txt"
   fi
 fi
 
@@ -248,4 +252,11 @@ if [ -f $R/make-support/exit-with-error ]; then
     done
   echo "--- end ---"
 fi
+# What the start of the log said about the machine and the split, again at
+# the end: only the last 5000 lines of a job's log can be fetched, and a
+# long part pushes the start out of reach.
+echo "--- setup ---"
+uname -srm
+cat "$PWD/setup.txt" 2>/dev/null || :
+echo "--- end ---"
 exit 0
