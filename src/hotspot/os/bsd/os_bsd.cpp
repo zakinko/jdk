@@ -1315,6 +1315,21 @@ static void *dlopen_helper(const char *filename, char *ebuf, int ebuflen) {
   void* result;
   JFR_ONLY(NativeLibraryLoadEvent load_event(filename, &result);)
 #ifdef __DragonFly__
+  // DragonFly's run-time linker maps a file and reads its ELF header without
+  // checking the file is that long, so dlopen() of an empty or truncated
+  // file faults in ld-elf.so itself -- SIGSEGV (SEGV_ACCERR) at the mapped
+  // page, which takes the VM down (runtime/8010389/VMThreadDlopen loads an
+  // empty libbroken.so and expects an UnsatisfiedLinkError).  Refuse such a
+  // file here, as dlopen does elsewhere.
+  struct stat st;
+  if (::stat(filename, &st) == 0 && S_ISREG(st.st_mode) &&
+      st.st_size < (off_t) sizeof(Elf64_Ehdr)) {
+    if (ebuf != nullptr && ebuflen > 0) {
+      os::snprintf_checked(ebuf, ebuflen, "%s: file too short", filename);
+    }
+    log_info(os)("shared library load of %s failed, file too short", filename);
+    return nullptr;
+  }
   pthread_mutex_lock(&dragonfly_dl_lock);
 #endif
   result = ::dlopen(filename, RTLD_LAZY);
