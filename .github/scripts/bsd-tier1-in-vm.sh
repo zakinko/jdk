@@ -196,11 +196,28 @@ if [ "${SHARDS:-1}" -gt 1 ]; then
         "$PWD/shard-files.txt" "$PWD/shard-tests.txt" > "$PWD/shard-exclude.txt"
     m=`sed 's/#.*//' "$PWD/shard-exclude.txt" | sort -u | wc -l`
     echo "shard $SHARD of $SHARDS: `expr $n - $m` of $n test files" | tee -a "$PWD/setup.txt"
-    extra=";EXTRA_PROBLEM_LISTS=$PWD/shard-exclude.txt"
+    cat "$PWD/shard-exclude.txt" >> "$PWD/extra-problems.txt"
   else
     { echo "could not list the tests of $suite, so running all of them; jtreg said:"
       tail -5 "$PWD/shard-all.txt"; } | tee -a "$PWD/setup.txt"
   fi
+fi
+
+if [ "$os" = DragonFly ]; then
+  # DragonFly lets a mapping read on past the end of a file that has been
+  # truncated under it, where POSIX has the access raise SIGBUS: these two
+  # map a file, truncate it and expect the read to fault, and fail with
+  #   java.lang.RuntimeException: InternalError not thrown
+  #   java.lang.RuntimeException: InternalError was expected
+  # on HAMMER2 and on tmpfs alike.  No signal arrives for the VM to turn
+  # into the InternalError, so there is nothing for it to do.
+  cat >> "$PWD/extra-problems.txt" <<'P'
+runtime/Unsafe/InternalErrorTest.java 0000000 generic-all
+java/foreign/sharedclosejfr/TestSharedCloseJFR.java 0000000 generic-all
+P
+fi
+if [ -s "$PWD/extra-problems.txt" ]; then
+  extra="$extra;EXTRA_PROBLEM_LISTS=$PWD/extra-problems.txt"
 fi
 
 gmake test-prebuilt $gnu \
