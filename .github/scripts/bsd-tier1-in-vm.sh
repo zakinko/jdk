@@ -215,6 +215,11 @@ if [ "$os" = DragonFly ]; then
 runtime/Unsafe/InternalErrorTest.java 0000000 generic-all
 java/foreign/sharedclosejfr/TestSharedCloseJFR.java 0000000 generic-all
 P
+  # jdk/tier1 part 1 takes the whole VM down: ssh stops answering about
+  # three minutes after java/lang/ProcessHandle/InfoTest passes, every time,
+  # and nothing comes back to say which test was running.  One test at a
+  # time, so the last name in the log is the one that does it.
+  case "$suite" in *tier1_part1) extra="$extra;JOBS=1" ;; esac
 fi
 if [ -s "$PWD/extra-problems.txt" ]; then
   extra="$extra;EXTRA_PROBLEM_LISTS=$PWD/extra-problems.txt"
