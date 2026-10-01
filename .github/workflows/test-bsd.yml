@@ -218,6 +218,15 @@ jobs:
           cpu: 4
           usesh: true
           copyback: true
+          # One aarch64 job in five died copying the workspace in, before a
+          # test ran, with rsync 3.2.7 on the runner talking to 3.5.0 in the
+          # guest:
+          #   Invalid block index 894783089 (count=0) [receiver]
+          #   rsync error: protocol incompatibility (code 2) at receiver.c(573)
+          # or "connection unexpectedly closed ... (code 12)".  The x86_64
+          # guests, the same image on the same release, have not.  Copy the
+          # aarch64 one in with tar instead.
+          sync: ${{ inputs.arch == 'aarch64' && 'tar' || 'rsync' }}
           envs: 'TEST_SUITE TIMEOUT_FACTOR SHARD SHARDS'
           prepare: |
             mount -t procfs proc /proc
