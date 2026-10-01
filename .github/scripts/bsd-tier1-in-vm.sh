@@ -221,6 +221,27 @@ P
   # time, so the last name in the log is the one that does it.
   case "$suite" in *tier1_part1) extra="$extra;JOBS=1" ;; esac
 fi
+case `uname -m` in
+  arm64|aarch64|evbarm)
+    # The aarch64 guests run under QEMU without acceleration -- the arm
+    # runners have no /dev/kvm -- and on all three BSDs the same tests stop
+    # making progress there and run into their timeouts, while the x86_64
+    # guests of the same BSDs pass them:
+    #   JSR166TestCase: "ForkJoin common pool thread stuck", 120s per case
+    #   ParkALot: "=> 1631 of 300000" for four hours, Thread-1 in yield0
+    #   NotifiedThenTimedOutWait, MiscMonitorTests waitNotifyTest,
+    #   both Starvation tests, StructuredTaskScopeTest,
+    #   LotsOfContendedMonitorEnter, GetStackTrace*StressTest
+    # One of them is enough to take a shard past the six-hour job limit,
+    # and the rest of its tests with it.  Whether the emulation or the port
+    # is to blame is not settled; leave them out here so that the rest is
+    # tested, and settle it on hardware.
+    if [ -s "$PWD/shard-tests.txt" ]; then
+      grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest)\.java' \
+          "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
+    fi
+    ;;
+esac
 if [ -s "$PWD/extra-problems.txt" ]; then
   extra="$extra;EXTRA_PROBLEM_LISTS=$PWD/extra-problems.txt"
 fi
