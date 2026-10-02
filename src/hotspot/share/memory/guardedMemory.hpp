@@ -120,8 +120,13 @@ protected:
       if (!os::is_readable_range((const void*) _guard, (const void*) (_guard + GUARD_SIZE))) {
         return false;
       }
-      u_char* c = (u_char*) _guard;
-      u_char* end = c + GUARD_SIZE;
+      // Read the guard through a volatile pointer.  The guard lies in this
+      // object, so a compiler may take it as dereferenceable and load it
+      // before the check above has said it can be: clang 21 for OpenBSD
+      // aarch64 does, and GuardedMemory.unmapped_vm faults at si_addr
+      // 0x1003 with is_readable_range() having returned false.
+      const volatile u_char* c = (const volatile u_char*) _guard;
+      const volatile u_char* end = c + GUARD_SIZE;
       while (c < end) {
         if (*c != badResourceValue) {
           return false;
