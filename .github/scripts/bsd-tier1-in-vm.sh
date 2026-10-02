@@ -231,6 +231,11 @@ P
   # and nothing comes back to say which test was running.  One test at a
   # time, so the last name in the log is the one that does it.
   case "$suite" in *tier1_part1) extra="$extra;JOBS=1" ;; esac
+  # With one test at a time the machine still dies right after
+  # java/lang/ProcessHandle/InfoTest passes, and the test that runs next is
+  # java/lang/ProcessHandle/OnExitTest, which starts and kills trees of
+  # processes and waits for each to exit.
+  echo "java/lang/ProcessHandle/OnExitTest.java 0000000 generic-all" >> "$PWD/extra-problems.txt"
 fi
 case `uname -m` in
   arm64|aarch64|evbarm)
