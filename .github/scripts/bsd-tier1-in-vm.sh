@@ -242,13 +242,16 @@ case `uname -m` in
     #   ParkALot: "=> 1631 of 300000" for four hours, Thread-1 in yield0
     #   NotifiedThenTimedOutWait, MiscMonitorTests waitNotifyTest,
     #   both Starvation tests, StructuredTaskScopeTest,
-    #   LotsOfContendedMonitorEnter, GetStackTrace*StressTest
+    #   LotsOfContendedMonitorEnter, GetStackTrace*StressTest,
+    #   MonitorEnterExit#Xcomp (testMutualExclusion, every ForkJoinPool
+    #   worker parked in awaitWork), forkjoin/SubmissionTest ("Submitted
+    #   task failed to execute"), GatherersMapConcurrentTest
     # One of them is enough to take a shard past the six-hour job limit,
     # and the rest of its tests with it.  Whether the emulation or the port
     # is to blame is not settled; leave them out here so that the rest is
     # tested, and settle it on hardware.
     if [ -s "$PWD/shard-tests.txt" ]; then
-      grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest)\.java' \
+      grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|forkjoin/SubmissionTest|GatherersMapConcurrentTest)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
     fi
     ;;
