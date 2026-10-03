@@ -44,6 +44,19 @@ TESTS="$PWD/bundles/tests"
 JT="$PWD/jtreg/installed"
 os=`uname -s`
 
+if [ -f bundles.sha256 ] && command -v sha256sum >/dev/null 2>&1; then
+  # A copy the guest damaged fails later in ways that look like JDK bugs --
+  # a SIGILL in libjvm, a class file with a bad magic number.  Say so here.
+  rc=0
+  sums=`cd bundles && sha256sum -c ../bundles.sha256 2>&1` || rc=$?
+  if [ $rc -ne 0 ]; then
+    echo "$sums" | grep -v ': OK$' | head -20
+    echo "the JDK bundle arrived in the guest damaged; not running the tests"
+    exit 1
+  fi
+  echo "bundle checksums match" >> "$PWD/setup.txt"
+fi
+
 if [ "$os" = NetBSD ]; then
   # A JDK built on NetBSD is marked as it is linked; one cross-built from
   # Linux cannot be, because paxctl(8) only exists here.  Without the mark

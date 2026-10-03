@@ -159,6 +159,20 @@ jobs:
       - name: 'Leave the symbols and the archives out of the guest'
         run: rm -rf bundles/symbols bundles/*.tar.gz
 
+      # The FreeBSD aarch64 guest has been handed corrupt copies:
+      #   tar: Damaged tar archive (bad header checksum)
+      #   java.lang.ClassFormatError: Incompatible magic value 2760999382
+      # and libjvm SIGILLs on its first run with no copy error at all.  ssh
+      # would have caught damage in transit, so it happens in the guest.
+      # Record what the JDK should look like, for the guest to check.
+      - name: 'Record the checksums of the JDK bundle'
+        run: |
+          cd bundles
+          find jdk -type f \( -name '*.so' -o -name modules -o -path '*/bin/*' \) -print0 |
+            xargs -0 sha256sum > ../bundles.sha256
+          wc -l ../bundles.sha256
+        if: inputs.target-os == 'freebsd'
+
       # Whether the guest is accelerated decides whether a six-hour job is
       # enough, and it is easy to get wrong: qemu lists kvm under -accel
       # help when the binary was built with it, which says nothing about
