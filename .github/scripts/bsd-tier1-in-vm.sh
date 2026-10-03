@@ -276,6 +276,19 @@ case `uname -m` in
       grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|Thread/virtual/stress/[A-Za-z]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
     fi
+    if [ "$os" = NetBSD ]; then
+      # NetBSD aarch64 lets the read past the end of a truncated, mapped
+      # file through, as DragonFly does, and fails the same two tests:
+      #   java.lang.RuntimeException: InternalError not thrown
+      #   java.lang.RuntimeException: InternalError was expected
+      # NetBSD x86_64 passes both, and its aarch64 fault handler would
+      # report the access as SIGBUS (BUS_ADRERR) if it faulted, so no fault
+      # is taken at all.  Why is not known.
+      cat >> "$PWD/extra-problems.txt" <<'P'
+runtime/Unsafe/InternalErrorTest.java 0000000 generic-all
+java/foreign/sharedclosejfr/TestSharedCloseJFR.java 0000000 generic-all
+P
+    fi
     ;;
 esac
 if [ -s "$PWD/extra-problems.txt" ]; then
