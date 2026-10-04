@@ -365,6 +365,17 @@ if [ -f $R/make-support/exit-with-error ]; then
     done
   echo "--- end ---"
 fi
+# The VM action copies the workspace back with cpio -H ustar, which takes
+# a path of at most 255 bytes, and FreeBSD aarch64's hs runtime shard 2
+# passed its tests and then failed the job on the way out:
+#   cpio: ./jdk/jdk/build/run-test-prebuilt/test-support/jtreg_test_hotspot_jtreg_tier1_runtime/classes/runtime/valhalla/valuetypes/field_layout/NullMarkersTest_64_NCOOP_NCCP_NCOH.d/...: Pathname too long: File name too long
+#   tar: Exiting with failure status due to previous errors
+# The classes the tests were compiled to are not collected from the copy,
+# so drop them, and then anything else that is still too long, by name.
+rm -rf $R/test-support/*/classes 2>/dev/null || :
+find build -type f 2>/dev/null | awk 'length("./jdk/jdk/" $0) > 250' |
+  while read -r f; do echo "not copied back, path too long: $f"; rm -f "$f"; done
+
 # What the start of the log said about the machine and the split, again at
 # the end: only the last 5000 lines of a job's log can be fetched, and a
 # long part pushes the start out of reach.
