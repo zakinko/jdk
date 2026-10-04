@@ -277,13 +277,15 @@ case `uname -m` in
     #   MonitorWaitNotify#Xcomp-noTieredCompilation, and in the virtual
     #   thread stress directory PingPong#ltq, TimedWaitALot and whatever runs
     #   after GetStackTraceALotWithTimedWait, which stalled jdk part 1 shard 4
-    #   for four hours on FreeBSD, NetBSD and OpenBSD alike
+    #   for four hours on FreeBSD, NetBSD and OpenBSD alike,
+    #   CancelTimerWithContention (96 minutes, NetBSD) and
+    #   Exchanger/ExchangeLoops (24 minutes, OpenBSD)
     # One of them is enough to take a shard past the six-hour job limit,
     # and the rest of its tests with it.  Whether the emulation or the port
     # is to blame is not settled; leave them out here so that the rest is
     # tested, and settle it on hardware.
     if [ -s "$PWD/shard-tests.txt" ]; then
-      grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|Thread/virtual/stress/[A-Za-z]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest)\.java' \
+      grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|CancelTimerWithContention|Thread/virtual/stress/[A-Za-z]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest|Exchanger/ExchangeLoops)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
     fi
     if [ "$os" = NetBSD ]; then
