@@ -120,7 +120,9 @@ if [ "$os" = DragonFly ]; then
     t=build/mtime-probe
     echo a > $t.1; sleep 1; echo b > $t.2; sleep 1; echo c > $t.1
     echo "mtime probe: first `stat -f %m $t.1` second `stat -f %m $t.2` (rewritten after it)"
-    rm -f $t.1 $t.2
+    : > $t.3; m1=`stat -f %m $t.3`; sleep 2; : > $t.3; m2=`stat -f %m $t.3`
+    echo "mtime probe: empty file truncated again 2s later: $m1 -> $m2"
+    rm -f $t.1 $t.2 $t.3
   } >> "$PWD/setup.txt" 2>&1
 fi
 
@@ -239,6 +241,14 @@ if [ "$os" = DragonFly ]; then
 runtime/Unsafe/InternalErrorTest.java 0000000 generic-all
 java/foreign/sharedclosejfr/TestSharedCloseJFR.java 0000000 generic-all
 P
+  # tools/javac/6394683/T6394683 makes its "newer" B.class by opening the
+  # existing, empty file with O_TRUNC and closing it, once a second, and
+  # stops with "Cannot create files" when the mtime never moves.  A file
+  # written with content does get a new mtime here (the probe above), so
+  # DragonFly appears to leave the mtime of an empty file alone when it is
+  # truncated to the size it already has, where POSIX open(2) says O_TRUNC
+  # marks it for update.  The second probe line records which.
+  echo "tools/javac/6394683/T6394683.java 0000000 generic-all" >> "$PWD/extra-problems.txt"
   # jdk/tier1 part 1 takes the whole VM down: ssh stops answering about
   # three minutes after java/lang/ProcessHandle/InfoTest passes, every time,
   # and nothing comes back to say which test was running.  One test at a
