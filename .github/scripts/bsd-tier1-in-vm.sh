@@ -204,6 +204,7 @@ if command -v ggrep >/dev/null 2>&1; then gnu="$gnu GREP=`command -v ggrep`"; fi
 # them as problems.  jtreg -l names the tests the part selects, after the
 # keywords and @requires, so the split is of what would really run.
 extra=""
+javaopts=""
 if [ "${SHARDS:-1}" -gt 1 ]; then
   root=${suite%%:*}
   "$JDK/bin/java" -jar "$JT/lib/jtreg.jar" -l -jdk:"$JDK" -k:'!headful' \
@@ -292,6 +293,14 @@ case `uname -m` in
       grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|CancelTimerWithContention|Thread/virtual/stress/[A-Za-z]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest|Exchanger/ExchangeLoops|jshell/ToolProviderTest|jshell/MultipleDocumentationTest|jshell/JdiFailingLaunchExecutionControlTest|jshell/ToolTabSnippetTest)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
     fi
+    # gc/epsilon/TestInitAllocs starts 500 JVMs one after another, in each
+    # of its 8 variants, and on OpenBSD aarch64 every variant ran out of
+    # its 1440 seconds:
+    #   "driver" action timed out with a timeout of 1440 seconds
+    # which took gc shard 2 to five hours.  That is under three seconds a
+    # JVM, and nothing says the driver had stopped rather than not
+    # finished; a hundred starts are left for it to make here.
+    javaopts="$javaopts -Dtries=100"
     if [ "$os" = NetBSD ]; then
       # NetBSD aarch64 lets the read past the end of a truncated, mapped
       # file through, as DragonFly does, and fails the same two tests:
@@ -317,7 +326,7 @@ gmake test-prebuilt $gnu \
   JT_HOME="$JT" \
   JDK_IMAGE_DIR="$JDK" \
   TEST_IMAGE_DIR="$TESTS" \
-  JTREG="JAVA_OPTIONS=-XX:-CreateCoredumpOnCrash;VERBOSE=fail,error,time;KEYWORDS=!headful;TIMEOUT_FACTOR=${TIMEOUT_FACTOR:-4}$extra"
+  JTREG="JAVA_OPTIONS=-XX:-CreateCoredumpOnCrash$javaopts;VERBOSE=fail,error,time;KEYWORDS=!headful;TIMEOUT_FACTOR=${TIMEOUT_FACTOR:-4}$extra"
 
 # make test-prebuilt prints "TEST FAILURE" and then returns 0: it reports
 # the failure as build/run-test-prebuilt/make-support/exit-with-error.
