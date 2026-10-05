@@ -51,8 +51,28 @@ if [ -f bundles.sha256 ] && command -v sha256sum >/dev/null 2>&1; then
   sums=`cd bundles && sha256sum -c ../bundles.sha256 2>&1` || rc=$?
   if [ $rc -ne 0 ]; then
     echo "$sums" | grep -v ': OK$' | head -20
-    echo "the JDK bundle arrived in the guest damaged; not running the tests"
-    exit 1
+    # The runner serves the bundles on its loopback, which the guest
+    # reaches as 10.0.2.2.  Fetch each damaged file once more, say where
+    # the two copies differ -- what the damage looks like is the lead on
+    # where it comes from -- and go on if the new copy is whole.
+    echo "$sums" | sed -n 's/: FAILED$//p' | while read -r f; do
+      if fetch -q -o "bundles/$f.new" "http://10.0.2.2:8642/$f"; then
+        n=`cmp -l "bundles/$f" "bundles/$f.new" | wc -l`
+        echo "$f: $n bytes differ from a second copy; the first few (offset, damaged, good, octal):"
+        cmp -l "bundles/$f" "bundles/$f.new" | head -8
+        mv "bundles/$f.new" "bundles/$f"
+      else
+        echo "$f: could not fetch it again from the runner"
+      fi
+    done
+    rc=0
+    sums=`cd bundles && sha256sum -c ../bundles.sha256 2>&1` || rc=$?
+    if [ $rc -ne 0 ]; then
+      echo "$sums" | grep -v ': OK$' | head -20
+      echo "the JDK bundle arrived in the guest damaged; not running the tests"
+      exit 1
+    fi
+    echo "bundle was damaged in the guest and fetched again" | tee -a "$PWD/setup.txt"
   fi
   echo "bundle checksums match" >> "$PWD/setup.txt"
 fi

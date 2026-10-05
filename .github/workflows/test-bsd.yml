@@ -173,6 +173,15 @@ jobs:
           wc -l ../bundles.sha256
         if: inputs.target-os == 'freebsd'
 
+      # For the guest to fetch a damaged file again from, at 10.0.2.2, which
+      # QEMU's user-mode network maps to the runner's loopback.  The server
+      # outlives the step; the runner ends it with the job.
+      - name: 'Serve the JDK bundle to the guest'
+        run: |
+          cd bundles
+          nohup python3 -m http.server 8642 --bind 127.0.0.1 > /dev/null 2>&1 &
+        if: inputs.target-os == 'freebsd'
+
       # Whether the guest is accelerated decides whether a six-hour job is
       # enough, and it is easy to get wrong: qemu lists kvm under -accel
       # help when the binary was built with it, which says nothing about
