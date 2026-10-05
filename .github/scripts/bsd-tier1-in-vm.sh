@@ -102,28 +102,14 @@ if [ "$os" = DragonFly ]; then
   # every other file system raises SIGBUS.  runtime/Unsafe/InternalErrorTest
   # ("InternalError not thrown") and java/foreign/sharedclosejfr/
   # TestSharedCloseJFR ("InternalError was expected") test for exactly that
-  # fault, and tools/javac/6394683/T6394683 stops at "Cannot create files"
-  # on the same file system.  The tests work in build/, so put that on
-  # tmpfs, which behaves as the tests expect.
+  # fault.  The tests work in build/, so put that on tmpfs, which behaves as
+  # the tests expect.
   mkdir -p build
   if mount_tmpfs tmpfs build; then
     echo "build/ is on tmpfs" >> "$PWD/setup.txt"
   else
     echo "could not put build/ on tmpfs; the tests run on HAMMER2" | tee -a "$PWD/setup.txt"
   fi
-  # tools/javac/6394683/T6394683 rewrites a file once a second for five
-  # seconds and still finds its mtime no newer than an older file's
-  # ("Cannot create files"), on HAMMER2 and on tmpfs alike.  Record how this
-  # machine stamps files and keeps time, to see which of the two is behind.
-  {
-    sysctl vfs.timestamp_precision kern.timecounter.hardware 2>&1 || :
-    t=build/mtime-probe
-    echo a > $t.1; sleep 1; echo b > $t.2; sleep 1; echo c > $t.1
-    echo "mtime probe: first `stat -f %m $t.1` second `stat -f %m $t.2` (rewritten after it)"
-    : > $t.3; m1=`stat -f %m $t.3`; sleep 2; : > $t.3; m2=`stat -f %m $t.3`
-    echo "mtime probe: empty file truncated again 2s later: $m1 -> $m2"
-    rm -f $t.1 $t.2 $t.3
-  } >> "$PWD/setup.txt" 2>&1
 fi
 
 if [ "$os" = OpenBSD ]; then
@@ -245,10 +231,11 @@ P
   # tools/javac/6394683/T6394683 makes its "newer" B.class by opening the
   # existing, empty file with O_TRUNC and closing it, once a second, and
   # stops with "Cannot create files" when the mtime never moves.  A file
-  # written with content does get a new mtime here (the probe above), so
-  # DragonFly appears to leave the mtime of an empty file alone when it is
-  # truncated to the size it already has, where POSIX open(2) says O_TRUNC
-  # marks it for update.  The second probe line records which.
+  # written with content does get a new mtime here, but an empty one
+  # truncated again does not, where POSIX open(2) says O_TRUNC marks it for
+  # update.  On build/'s tmpfs, with vfs.timestamp_precision 2:
+  #   echo c > f (2s after f was first written):  mtime moved on
+  #   : > e; sleep 2; : > e:  1791176110 -> 1791176110
   echo "tools/javac/6394683/T6394683.java 0000000 generic-all" >> "$PWD/extra-problems.txt"
   # jdk/tier1 part 1 takes the whole VM down: ssh stops answering about
   # three minutes after java/lang/ProcessHandle/InfoTest passes, every time,
