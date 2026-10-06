@@ -240,7 +240,12 @@ jobs:
           mem: 8192
           cpu: 4
           usesh: true
-          copyback: true
+          # Copying the whole workspace back failed after the tests had passed,
+          # on a tar stream the guest damaged:
+          #   [TAR STDERR] tar: Skipping to next header
+          #   ##[error]Tar exited with code 2
+          # The aarch64 results come back in a step of their own instead.
+          copyback: ${{ inputs.arch != 'aarch64' }}
           # One aarch64 job in five died copying the workspace in, before a
           # test ran, with rsync 3.2.7 on the runner talking to 3.5.0 in the
           # guest:
@@ -306,6 +311,25 @@ jobs:
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ inputs.shard-count }}
         if: inputs.target-os == 'dragonfly'
+
+      # Only what the steps below read, and checked: the FreeBSD aarch64
+      # guest damages data it reads as well as data it writes, so a copy
+      # that does not list cleanly is taken again.  The VM is still running;
+      # the action leaves it to the end of the job, and its ssh alias is the
+      # name of the OS.
+      - name: 'Copy the test results back from the FreeBSD aarch64 guest'
+        run: |
+          for n in 1 2 3; do
+            if ssh freebsd "cd '$GITHUB_WORKSPACE' && find build \( -name '*.jtr' -o -name summary.txt -o -name stats.txt -o -name 'hs_err_pid*.log' -o -name 'replay_pid*.log' -o -path '*/make-support/exit-with-error' -o -path '*/test-results/*' \) -type f -print | tar -czf - -T -" > results.tgz &&
+               tar -tzf results.tgz > /dev/null; then
+              tar -xzf results.tgz
+              rm -f results.tgz
+              exit 0
+            fi
+            echo "copy $n of the results came back damaged"
+          done
+          exit 1
+        if: always() && inputs.target-os == 'freebsd' && inputs.arch == 'aarch64'
 
       - name: 'Package test results'
         run: |
