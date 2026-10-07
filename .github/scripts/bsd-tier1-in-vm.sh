@@ -273,13 +273,14 @@ case `uname -m` in
     #   timeout waiting for connection", then "Failed remote launch:
     #   java.util.concurrent.TimeoutException",
     #   and tools/javac/file/zip/T6836682, which writes a jar past 4 GB and
-    #   ran out of 1440 seconds on FreeBSD
+    #   ran out of 1440 seconds on FreeBSD, as did java/foreign/
+    #   TestUpcallStress, still finishing a case a second at case 712
     # One of them is enough to take a shard past the six-hour job limit,
     # and the rest of its tests with it.  Whether the emulation or the port
     # is to blame is not settled; leave them out here so that the rest is
     # tested, and settle it on hardware.
     if [ -s "$PWD/shard-tests.txt" ]; then
-      grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|CancelTimerWithContention|Thread/virtual/stress/[A-Za-z]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest|Exchanger/ExchangeLoops|jshell/ToolProviderTest|jshell/MultipleDocumentationTest|jshell/JdiFailingLaunchExecutionControlTest|jshell/ToolTabSnippetTest|javac/file/zip/T6836682)\.java' \
+      grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|CancelTimerWithContention|Thread/virtual/stress/[A-Za-z]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest|Exchanger/ExchangeLoops|jshell/ToolProviderTest|jshell/MultipleDocumentationTest|jshell/JdiFailingLaunchExecutionControlTest|jshell/ToolTabSnippetTest|javac/file/zip/T6836682|foreign/TestUpcallStress)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
     fi
     # gc/epsilon/TestInitAllocs starts 500 JVMs one after another, in each
