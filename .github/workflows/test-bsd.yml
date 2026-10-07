@@ -164,11 +164,15 @@ jobs:
       #   java.lang.ClassFormatError: Incompatible magic value 2760999382
       # and libjvm SIGILLs on its first run with no copy error at all.  ssh
       # would have caught damage in transit, so it happens in the guest.
-      # Record what the JDK should look like, for the guest to check.
+      # Record what the JDK should look like, for the guest to check: all of
+      # it, since a part with the libraries, lib/modules and bin/ intact
+      # still stopped on a damaged jmod, in the jlink run the script starts
+      # with: "jlink could not build a probe image; it said: Error: invalid
+      # distance too far back".
       - name: 'Record the checksums of the JDK bundle'
         run: |
           cd bundles
-          find jdk -type f \( -name '*.so' -o -name modules -o -path '*/bin/*' \) -print0 |
+          find jdk -type f -print0 |
             xargs -0 sha256sum > ../bundles.sha256
           wc -l ../bundles.sha256
         if: inputs.target-os == 'freebsd'
