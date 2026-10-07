@@ -173,15 +173,6 @@ jobs:
           wc -l ../bundles.sha256
         if: inputs.target-os == 'freebsd'
 
-      # For the guest to fetch a damaged file again from, at 10.0.2.2, which
-      # QEMU's user-mode network maps to the runner's loopback.  The server
-      # outlives the step; the runner ends it with the job.
-      - name: 'Serve the JDK bundle to the guest'
-        run: |
-          cd bundles
-          nohup python3 -m http.server 8642 --bind 127.0.0.1 > /dev/null 2>&1 &
-        if: inputs.target-os == 'freebsd'
-
       # Whether the guest is accelerated decides whether a six-hour job is
       # enough, and it is easy to get wrong: qemu lists kvm under -accel
       # help when the binary was built with it, which says nothing about
@@ -259,13 +250,41 @@ jobs:
           prepare: |
             mount -t procfs proc /proc
             pkg install -y bash gmake zip unzip gsed gnugrep
-          run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
+          # On aarch64 the tests run in the next step, over the action's ssh.
+          run: ${{ inputs.arch == 'aarch64' && 'echo the tests run in the next step' || 'sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"' }}
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
           TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ inputs.shard-count }}
         if: inputs.target-os == 'freebsd'
+
+      # The FreeBSD aarch64 guest damages a file of the bundle it is copied
+      # in in about one part of three -- lib/modules or lib/server/libjvm.so,
+      # never the same twice in a row -- and the guest cannot reach the
+      # runner to fetch one again: from 10.0.2.2 it got "Connection
+      # refused" and "Operation timed out".  ssh from the runner into the
+      # guest works, so check the bundle from here, send what is damaged
+      # again, say how the copies differ, and then run the tests the same
+      # way.  The action leaves the VM running; its ssh alias is the OS.
+      - name: 'Run tests in the FreeBSD aarch64 virtual machine'
+        run: |
+          w="$GITHUB_WORKSPACE"
+          for n in 1 2 3; do
+            bad=`ssh freebsd "cd '$w/bundles' && sha256sum -c ../bundles.sha256 2>/dev/null" | sed -n 's/: FAILED$//p'`
+            [ -n "$bad" ] || break
+            for f in $bad; do
+              ssh freebsd "cat > '$w/bundles/$f.new'" < "bundles/$f"
+              ssh freebsd "cd '$w/bundles' && echo \"$f: \`cmp -l $f $f.new | wc -l\` bytes differ from a second copy; the first few (offset, damaged, good, octal):\" && cmp -l $f $f.new | head -8; mv $f.new $f"
+            done
+          done
+          ssh freebsd "cd '$w' && TEST_SUITE='$TEST_SUITE' TIMEOUT_FACTOR='$TIMEOUT_FACTOR' SHARD='$SHARD' SHARDS='$SHARDS' sh .github/scripts/bsd-tier1-in-vm.sh '$TEST_SUITE'"
+        env:
+          TEST_SUITE: ${{ matrix.test-suite }}
+          TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ inputs.shard-count }}
+        if: inputs.target-os == 'freebsd' && inputs.arch == 'aarch64'
 
       # OpenBSD refuses a writable and executable mapping on a file system
       # not mounted wxallowed, and the workspace is under /home.  The JDK
