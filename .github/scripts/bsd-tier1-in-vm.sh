@@ -362,6 +362,9 @@ if [ -f $R/make-support/exit-with-error ]; then
       # has no siginfo line, and under set -e a grep that finds nothing
       # ends the script here, before the setup block and before the action
       # copies anything back.
+      # Which thread it was: the native frames can stop at the first
+      # library without frame pointers, as libc's did on DragonFly.
+      grep -m1 '^Current thread' "$e" || :
       grep -m1 -A1 '^siginfo:' "$e" || :
       sed -n '/^Registers:/,/^$/p' "$e" | head -24
       sed -n '/^Native frames:/,/^$/p' "$e" | head -16
