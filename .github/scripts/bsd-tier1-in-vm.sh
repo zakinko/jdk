@@ -358,7 +358,11 @@ if [ -f $R/make-support/exit-with-error ]; then
   find $R/test-support -name 'hs_err_pid*.log' 2>/dev/null | head -4 |
     while read e; do
       echo "--- ${e#$R/test-support/} ---"
-      grep -m1 -A1 '^siginfo:' "$e"
+      # An hs_err file cut short -- the VM ran out of memory writing it --
+      # has no siginfo line, and under set -e a grep that finds nothing
+      # ends the script here, before the setup block and before the action
+      # copies anything back.
+      grep -m1 -A1 '^siginfo:' "$e" || :
       sed -n '/^Registers:/,/^$/p' "$e" | head -24
       sed -n '/^Native frames:/,/^$/p' "$e" | head -16
     done
