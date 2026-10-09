@@ -48,7 +48,7 @@ if [ -f bundles.sha256 ] && command -v sha256sum >/dev/null 2>&1; then
   # A copy the guest damaged fails later in ways that look like JDK bugs --
   # a SIGILL in libjvm, a class file with a bad magic number.  Say so here.
   rc=0
-  sums=`cd bundles && sha256sum -c ../bundles.sha256 2>&1` || rc=$?
+  sums=`sha256sum -c bundles.sha256 2>&1` || rc=$?
   if [ $rc -ne 0 ]; then
     echo "$sums" | grep -v ': OK$' | head -20
     echo "the JDK bundle arrived in the guest damaged; not running the tests"
