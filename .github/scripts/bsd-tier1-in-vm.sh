@@ -351,6 +351,14 @@ if [ -f $R/make-support/exit-with-error ]; then
       # then the only lead.
       sed -n '/^----------System.err/,/^----------rerun/p' "$jtr" |
         grep -v '^[[:space:]]*at ' | tail -12
+      # A test that timed out is a hang only the thread dump jtreg took of it
+      # can explain, and that is in the .jtr, which the log does not show.
+      # The test's own threads and any in jshell or JDI code, here.
+      if grep -q 'Running jstack' "$jtr"; then
+        awk 'BEGIN { RS = "" }
+             /^"(main|MainThread)"/ || /jdk\.jshell|com\.sun\.tools\.jdi|jdk\.jdi/ { print; print "" }' "$jtr" |
+          head -120
+      fi
     done
   # A crash names only its problematic frame on the console; what faulted
   # and where is in the hs_err file, which otherwise has to be fetched from
