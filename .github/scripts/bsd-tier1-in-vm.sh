@@ -280,7 +280,7 @@ case `uname -m` in
     # is to blame is not settled; leave them out here so that the rest is
     # tested, and settle it on hardware.
     if [ -s "$PWD/shard-tests.txt" ]; then
-      grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|CancelTimerWithContention|Thread/virtual/stress/[A-Za-z]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest|Exchanger/ExchangeLoops|jshell/ToolProviderTest|jshell/MultipleDocumentationTest|jshell/JdiFailingLaunchExecutionControlTest|jshell/ToolTabSnippetTest|jshell/JdiStarterTest|javac/file/zip/T6836682|foreign/TestUpcallStress)\.java' \
+      grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|CancelTimerWithContention|Thread/virtual/stress/[A-Za-z0-9]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest|Exchanger/ExchangeLoops|jshell/ToolProviderTest|jshell/MultipleDocumentationTest|jshell/JdiFailingLaunchExecutionControlTest|jshell/ToolTabSnippetTest|jshell/JdiStarterTest|javac/file/zip/T6836682|foreign/TestUpcallStress)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
     fi
     # gc/epsilon/TestInitAllocs starts 500 JVMs one after another, in each
