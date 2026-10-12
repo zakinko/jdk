@@ -172,11 +172,19 @@ jobs:
       # stopped before a test ran on "Error: Unable to initialize main class
       # com.sun.javatest.regtest.Main / Caused by: java.lang.NoClassDefFoundError:
       # com/sun/javatest/Harness$Fault".  The paths are the workspace's.
+      # And the test sources the part compiles: one came in with a run of
+      # binary in the middle of an import --
+      #   TestUpcallException.java:39: error: unmappable character (0xB3) for encoding UTF-8
+      #   import java.lang.foreign.MemorySegmJ_?bxW?G???...
+      # -- after the copy in had printed "tar: Damaged tar archive (bad
+      # header checksum)" and "Retrying..." six times.
       - name: 'Record the checksums of the JDK bundle'
         run: |
-          find bundles/jdk jtreg/installed -type f -print0 |
+          find bundles/jdk jtreg/installed test/lib "${TEST_SUITE%%:*}" -type f -print0 |
             xargs -0 sha256sum > bundles.sha256
           wc -l bundles.sha256
+        env:
+          TEST_SUITE: ${{ matrix.test-suite }}
         if: inputs.target-os == 'freebsd'
 
       # Whether the guest is accelerated decides whether a six-hour job is
