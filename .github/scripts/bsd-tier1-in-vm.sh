@@ -390,6 +390,22 @@ rm -rf $R/test-support/*/classes 2>/dev/null || :
 find build -type f 2>/dev/null | awk 'length("./jdk/jdk/" $0) > 250' |
   while read -r f; do echo "not copied back, path too long: $f"; rm -f "$f"; done
 
+# DragonFly's VMs have twice failed to commit metaspace: "Native memory
+# allocation (mmap) failed to map 65536 bytes. Error detail: Failed to
+# commit metaspace." in langtools, and an hs_err from inside
+# metaspace::VirtualSpaceNode::ensure_range_is_committed in compiler part 2.
+# build/ is a tmpfs there, which holds what the tests write in memory; how
+# much memory it held and how much was left at the end says whether that
+# is what ran the machine short.
+if [ "$os" = DragonFly ]; then
+  {
+    df -h build 2>&1 | tail -1
+    sysctl hw.physmem vm.stats.vm.v_page_size vm.stats.vm.v_free_count \
+      vm.stats.vm.v_inactive_count vm.stats.vm.v_cache_count 2>&1
+    swapctl -l 2>&1 || :
+  } >> "$PWD/setup.txt"
+fi
+
 # What the start of the log said about the machine and the split, again at
 # the end: only the last 5000 lines of a job's log can be fetched, and a
 # long part pushes the start out of reach.
