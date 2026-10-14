@@ -408,6 +408,26 @@ if [ "$os" = DragonFly ]; then
   } >> "$PWD/setup.txt"
 fi
 
+# NetBSD x86_64's java/lang/ProcessHandle/InfoTest test3 has three times
+# destroyed a sleep that then went on running ("timeout waiting for process
+# to terminate"), and the start times it printed were in 1970 --
+# "startTime: Optional[1970-01-11T12:32:37.180Z]" for the test's own VM,
+# which jtreg started at 16:55 on 2026-10-13.  ProcessHandle.destroy() only
+# signals a process whose start time still matches the one it recorded.
+# The kernel stamps p_ustart with getmicrotime() at fork; see whether that
+# and the wall clock agree here, and whether a process's start time holds.
+if [ "$os" = NetBSD ]; then
+  {
+    echo "date: `date -u '+%Y-%m-%dT%H:%M:%S'`"
+    sysctl kern.boottime kern.timecounter.hardware 2>&1
+    sleep 5 & sp=$!
+    echo "sleep started: `ps -o lstart= -p $sp`"
+    sleep 2
+    echo "sleep started: `ps -o lstart= -p $sp` (asked again 2s later)"
+    wait $sp
+  } >> "$PWD/setup.txt" 2>&1
+fi
+
 # What the start of the log said about the machine and the split, again at
 # the end: only the last 5000 lines of a job's log can be fetched, and a
 # long part pushes the start out of reach.
