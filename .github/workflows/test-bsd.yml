@@ -285,11 +285,12 @@ jobs:
         run: |
           w="$GITHUB_WORKSPACE"
           for n in 1 2 3; do
-            bad=`ssh freebsd "cd '$w' && sha256sum -c bundles.sha256 2>/dev/null" | sed -n 's/: FAILED$//p'`
+            # "FAILED open or read" is a file that did not arrive at all.
+            bad=`ssh freebsd "cd '$w' && sha256sum -c bundles.sha256 2>/dev/null" | sed -n 's/: FAILED.*$//p'`
             [ -n "$bad" ] || break
             for f in $bad; do
-              ssh freebsd "cat > '$w/$f.new'" < "$f"
-              ssh freebsd "cd '$w' && echo \"$f: \`cmp -l $f $f.new | wc -l\` bytes differ from a second copy; the first few (offset, damaged, good, octal):\" && cmp -l $f $f.new | head -8; mv $f.new $f"
+              ssh freebsd "mkdir -p '$w/'\`dirname $f\` && cat > '$w/$f.new'" < "$f"
+              ssh freebsd "cd '$w' && if [ -f $f ]; then echo \"$f: \`cmp -l $f $f.new | wc -l\` bytes differ from a second copy; the first few (offset, damaged, good, octal):\" && cmp -l $f $f.new | head -8; else echo \"$f: did not arrive; sent again\"; fi; mv $f.new $f"
             done
           done
           ssh freebsd "cd '$w' && TEST_SUITE='$TEST_SUITE' TIMEOUT_FACTOR='$TIMEOUT_FACTOR' SHARD='$SHARD' SHARDS='$SHARDS' sh .github/scripts/bsd-tier1-in-vm.sh '$TEST_SUITE'"
