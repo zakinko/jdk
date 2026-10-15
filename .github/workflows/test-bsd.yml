@@ -285,8 +285,10 @@ jobs:
         run: |
           w="$GITHUB_WORKSPACE"
           for n in 1 2 3; do
-            # "FAILED open or read" is a file that did not arrive at all.
-            bad=`ssh freebsd "cd '$w' && sha256sum -c bundles.sha256 2>/dev/null" | sed -n 's/: FAILED.*$//p'`
+            # A file that did not arrive at all gets no FAILED line from
+            # FreeBSD's sha256sum, only "No such file or directory" on
+            # stderr, so look for those by name.
+            bad=$(ssh freebsd "cd '$w' && { sha256sum -c bundles.sha256 2>/dev/null | sed -n 's/: FAILED.*\$//p'; awk '{ print \$2 }' bundles.sha256 | while read -r f; do [ -f \"\$f\" ] || echo \"\$f\"; done; } | sort -u")
             [ -n "$bad" ] || break
             for f in $bad; do
               ssh freebsd "mkdir -p '$w/'\`dirname $f\` && cat > '$w/$f.new'" < "$f"
