@@ -119,7 +119,15 @@ public:
       rgn_found = VirtualMemoryTracker::Instance::tree()->find_reserved_region((address)base);
     }
     ASSERT_TRUE(rgn_found.is_valid());
-    ASSERT_EQ(rgn_found.base(), (address)base);
+    // Reserved regions are told apart by their tag only, so a thread stack
+    // that ends where this reservation begins is reported together with it.
+    // Where mmap places mappings top-down that does not happen; where it
+    // places them at random, as on OpenBSD, it now and then does.
+    ASSERT_LE(rgn_found.base(), (address)base);
+    ASSERT_GE(rgn_found.end(), (address)base + size);
+    // Look at this reservation alone from here on, or the committed part of
+    // such a stack would be taken for part of it.
+    rgn_found = VirtualMemoryRegion((address)base, size);
 
 
     bool precise_tracking_supported = false;

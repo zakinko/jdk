@@ -1269,18 +1269,20 @@ bool os::dll_address_to_library_name(address addr, char* buf,
 // in case of error it checks if .dll/.so was built for the
 // same architecture as Hotspot is running on
 
-#ifdef __DragonFly__
-// DragonFly's dlclose() lets go of the run-time linker's lock while it runs
-// the object's fini functions, and afterwards unloads it on the strength of
-// the reference count it read before -- which a dlopen() of the same object
-// on another thread has raised in the meantime.  The process then stops in
+#if defined(__DragonFly__) || defined(__NetBSD__)
+// The run-time linker lets go of its lock while it runs an object's fini
+// functions in dlclose(), and a dlopen() or dlclose() of the same object on
+// another thread gets in.  On DragonFly, dlclose() then unloads the object
+// on the strength of a reference count it read before, and the process
+// stops in
 //   ld-elf.so.2: assert failed: .../libexec/rtld-elf/rtld.c:4345
-// which is unload_object()'s assert(root->refcount == 0); this is the
-// java/foreign/LibraryLookupTest in tier1, which loads and unloads one
-// library from several threads.  DragonFly's master branch still has the
-// same dlclose().  Keep the VM's own dlopen and dlclose calls from
-// overlapping.
-static pthread_mutex_t dragonfly_dl_lock = PTHREAD_MUTEX_INITIALIZER;
+// which is unload_object()'s assert(root->refcount == 0).  NetBSD's
+// ld.elf_so says as much in _rtld_call_fini_functions() -- "XXX This can
+// race against a concurrent dlclose()" -- and there the process dies of
+// SIGSEGV.  Both are java/foreign/LibraryLookupTest in tier1, in
+// testLoadLibraryShared, which loads and unloads one library from several
+// threads.  Keep the VM's own dlopen and dlclose calls from overlapping.
+static pthread_mutex_t bsd_dl_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
 static void *dlopen_helper(const char *filename, char *ebuf, int ebuflen) {
@@ -1315,11 +1317,29 @@ static void *dlopen_helper(const char *filename, char *ebuf, int ebuflen) {
   void* result;
   JFR_ONLY(NativeLibraryLoadEvent load_event(filename, &result);)
 #ifdef __DragonFly__
-  pthread_mutex_lock(&dragonfly_dl_lock);
+  // DragonFly's run-time linker maps a file and reads its ELF header without
+  // checking the file is that long, so dlopen() of an empty or truncated
+  // file faults in ld-elf.so itself -- SIGSEGV (SEGV_ACCERR) at the mapped
+  // page, which takes the VM down (runtime/8010389/VMThreadDlopen loads an
+  // empty libbroken.so and expects an UnsatisfiedLinkError).  Refuse such a
+  // file here, as dlopen does elsewhere.
+  struct stat st;
+  if (::stat(filename, &st) == 0 && S_ISREG(st.st_mode) &&
+      st.st_size < (off_t) sizeof(Elf64_Ehdr)) {
+    if (ebuf != nullptr && ebuflen > 0) {
+      os::snprintf_checked(ebuf, ebuflen, "%s: file too short", filename);
+    }
+    log_info(os)("shared library load of %s failed, file too short", filename);
+    result = nullptr;  // the JFR event above reads it when it goes
+    return nullptr;
+  }
+#endif
+#if defined(__DragonFly__) || defined(__NetBSD__)
+  pthread_mutex_lock(&bsd_dl_lock);
 #endif
   result = ::dlopen(filename, RTLD_LAZY);
-#ifdef __DragonFly__
-  pthread_mutex_unlock(&dragonfly_dl_lock);
+#if defined(__DragonFly__) || defined(__NetBSD__)
+  pthread_mutex_unlock(&bsd_dl_lock);
 #endif
   if (result == nullptr) {
     const char* error_report = ::dlerror();
@@ -3143,12 +3163,12 @@ bool os::pd_dll_unload(void* libhandle, char* ebuf, int ebuflen) {
     ebuf[ebuflen - 1] = '\0';
   }
 
-#ifdef __DragonFly__
-  pthread_mutex_lock(&dragonfly_dl_lock);
+#if defined(__DragonFly__) || defined(__NetBSD__)
+  pthread_mutex_lock(&bsd_dl_lock);
 #endif
   bool res = (0 == ::dlclose(libhandle));
-#ifdef __DragonFly__
-  pthread_mutex_unlock(&dragonfly_dl_lock);
+#if defined(__DragonFly__) || defined(__NetBSD__)
+  pthread_mutex_unlock(&bsd_dl_lock);
 #endif
   if (!res) {
     // error analysis when dlopen fails

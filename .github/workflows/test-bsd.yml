@@ -48,6 +48,18 @@ on:
         required: false
         type: string
         default: 'ubuntu-24.04'
+      shards:
+        description: >-
+          How many jobs each part is split across, as a JSON list of the
+          shard numbers, and the count.  An emulated guest runs a part for
+          longer than the six hours a job may take.
+        required: false
+        type: string
+        default: '[1]'
+      shard-count:
+        required: false
+        type: string
+        default: '1'
 
 jobs:
   test:
@@ -70,6 +82,7 @@ jobs:
           - 'hs/tier1 runtime'
           - 'hs/tier1 serviceability'
           - 'lib-test/tier1'
+        shard: ${{ fromJSON(inputs.shards) }}
 
         # The same twelve groups upstream's test.yml uses, so that a part
         # failing here can be compared with the same part on Linux. jaxp is
@@ -137,6 +150,43 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
 
+      # The VM actions copy the whole workspace into the guest, and the
+      # tests use none of the symbols bundle.  FreeBSD aarch64's copy failed
+      # on it with "bundles/symbols/jdk-28/lib/server/libjvm.debuginfo failed
+      # verification -- update discarded" and rsync's exit code 23, before a
+      # test ran.  The archives the bundles were unpacked from are not
+      # needed there either.
+      - name: 'Leave the symbols and the archives out of the guest'
+        run: rm -rf bundles/symbols bundles/*.tar.gz
+
+      # The FreeBSD aarch64 guest has been handed corrupt copies:
+      #   tar: Damaged tar archive (bad header checksum)
+      #   java.lang.ClassFormatError: Incompatible magic value 2760999382
+      # and libjvm SIGILLs on its first run with no copy error at all.  ssh
+      # would have caught damage in transit, so it happens in the guest.
+      # Record what the JDK should look like, for the guest to check: all of
+      # it, since a part with the libraries, lib/modules and bin/ intact
+      # still stopped on a damaged jmod, in the jlink run the script starts
+      # with: "jlink could not build a probe image; it said: Error: invalid
+      # distance too far back".  jtreg too: a part with the JDK whole
+      # stopped before a test ran on "Error: Unable to initialize main class
+      # com.sun.javatest.regtest.Main / Caused by: java.lang.NoClassDefFoundError:
+      # com/sun/javatest/Harness$Fault".  The paths are the workspace's.
+      # And the test sources the part compiles: one came in with a run of
+      # binary in the middle of an import --
+      #   TestUpcallException.java:39: error: unmappable character (0xB3) for encoding UTF-8
+      #   import java.lang.foreign.MemorySegmJ_?bxW?G???...
+      # -- after the copy in had printed "tar: Damaged tar archive (bad
+      # header checksum)" and "Retrying..." six times.
+      - name: 'Record the checksums of the JDK bundle'
+        run: |
+          find bundles/jdk jtreg/installed test/lib "${TEST_SUITE%%:*}" -type f -print0 |
+            xargs -0 sha256sum > bundles.sha256
+          wc -l bundles.sha256
+        env:
+          TEST_SUITE: ${{ matrix.test-suite }}
+        if: inputs.target-os == 'freebsd'
+
       # Whether the guest is accelerated decides whether a six-hour job is
       # enough, and it is easy to get wrong: qemu lists kvm under -accel
       # help when the binary was built with it, which says nothing about
@@ -159,7 +209,7 @@ jobs:
           cpu: 4
           usesh: true
           copyback: true
-          envs: 'TEST_SUITE TIMEOUT_FACTOR'
+          envs: 'TEST_SUITE TIMEOUT_FACTOR SHARD SHARDS'
           # -U: the image carries some of these already, and pkg_add
           # refuses a newer version from the mirror without it -- "A
           # different version of bash-5.3.20 is already installed".  The
@@ -182,6 +232,8 @@ jobs:
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
           TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ inputs.shard-count }}
         if: inputs.target-os == 'netbsd'
 
       # jtreg's process tests read /proc, which FreeBSD does not mount.
@@ -193,16 +245,63 @@ jobs:
           mem: 8192
           cpu: 4
           usesh: true
-          copyback: true
-          envs: 'TEST_SUITE TIMEOUT_FACTOR'
+          # Copying the whole workspace back failed after the tests had passed,
+          # on a tar stream the guest damaged:
+          #   [TAR STDERR] tar: Skipping to next header
+          #   ##[error]Tar exited with code 2
+          # The aarch64 results come back in a step of their own instead.
+          copyback: ${{ inputs.arch != 'aarch64' }}
+          # One aarch64 job in five died copying the workspace in, before a
+          # test ran, with rsync 3.2.7 on the runner talking to 3.5.0 in the
+          # guest:
+          #   Invalid block index 894783089 (count=0) [receiver]
+          #   rsync error: protocol incompatibility (code 2) at receiver.c(573)
+          # or "connection unexpectedly closed ... (code 12)".  The x86_64
+          # guests, the same image on the same release, have not.  Copy the
+          # aarch64 one in with tar instead.
+          sync: ${{ inputs.arch == 'aarch64' && 'tar' || 'rsync' }}
+          envs: 'TEST_SUITE TIMEOUT_FACTOR SHARD SHARDS'
           prepare: |
             mount -t procfs proc /proc
             pkg install -y bash gmake zip unzip gsed gnugrep
-          run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
+          # On aarch64 the tests run in the next step, over the action's ssh.
+          run: ${{ inputs.arch == 'aarch64' && 'echo the tests run in the next step' || 'sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"' }}
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
           TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ inputs.shard-count }}
         if: inputs.target-os == 'freebsd'
+
+      # The FreeBSD aarch64 guest damages a file of the bundle it is copied
+      # in in about one part of three -- lib/modules or lib/server/libjvm.so,
+      # never the same twice in a row -- and the guest cannot reach the
+      # runner to fetch one again: from 10.0.2.2 it got "Connection
+      # refused" and "Operation timed out".  ssh from the runner into the
+      # guest works, so check the bundle from here, send what is damaged
+      # again, say how the copies differ, and then run the tests the same
+      # way.  The action leaves the VM running; its ssh alias is the OS.
+      - name: 'Run tests in the FreeBSD aarch64 virtual machine'
+        run: |
+          w="$GITHUB_WORKSPACE"
+          for n in 1 2 3; do
+            # A file that did not arrive at all gets no FAILED line from
+            # FreeBSD's sha256sum, only "No such file or directory" on
+            # stderr, so look for those by name.
+            bad=$(ssh freebsd "cd '$w' && { sha256sum -c bundles.sha256 2>/dev/null | sed -n 's/: FAILED.*\$//p'; awk '{ print \$2 }' bundles.sha256 | while read -r f; do [ -f \"\$f\" ] || echo \"\$f\"; done; } | sort -u")
+            [ -n "$bad" ] || break
+            for f in $bad; do
+              ssh freebsd "mkdir -p '$w/'\`dirname $f\` && cat > '$w/$f.new'" < "$f"
+              ssh freebsd "cd '$w' && if [ -f $f ]; then echo \"$f: \`cmp -l $f $f.new | wc -l\` bytes differ from a second copy; the first few (offset, damaged, good, octal):\" && cmp -l $f $f.new | head -8; else echo \"$f: did not arrive; sent again\"; fi; mv $f.new $f"
+            done
+          done
+          ssh freebsd "cd '$w' && TEST_SUITE='$TEST_SUITE' TIMEOUT_FACTOR='$TIMEOUT_FACTOR' SHARD='$SHARD' SHARDS='$SHARDS' sh .github/scripts/bsd-tier1-in-vm.sh '$TEST_SUITE'"
+        env:
+          TEST_SUITE: ${{ matrix.test-suite }}
+          TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ inputs.shard-count }}
+        if: inputs.target-os == 'freebsd' && inputs.arch == 'aarch64'
 
       # OpenBSD refuses a writable and executable mapping on a file system
       # not mounted wxallowed, and the workspace is under /home.  The JDK
@@ -216,7 +315,7 @@ jobs:
           cpu: 4
           usesh: true
           copyback: true
-          envs: 'TEST_SUITE TIMEOUT_FACTOR'
+          envs: 'TEST_SUITE TIMEOUT_FACTOR SHARD SHARDS'
           prepare: |
             mount -u -o wxallowed /home
             until pkg_add bash gmake zip unzip-- gsed ggrep libiconv; do
@@ -226,6 +325,8 @@ jobs:
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
           TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ inputs.shard-count }}
         if: inputs.target-os == 'openbsd'
 
       - name: 'Run tests in a DragonFly virtual machine'
@@ -236,14 +337,35 @@ jobs:
           cpu: 4
           usesh: true
           copyback: true
-          envs: 'TEST_SUITE TIMEOUT_FACTOR'
+          envs: 'TEST_SUITE TIMEOUT_FACTOR SHARD SHARDS'
           prepare: |
             pkg install -y bash gmake zip unzip gsed gnugrep
           run: sh .github/scripts/bsd-tier1-in-vm.sh "$TEST_SUITE"
         env:
           TEST_SUITE: ${{ matrix.test-suite }}
           TIMEOUT_FACTOR: ${{ inputs.timeout-factor }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ inputs.shard-count }}
         if: inputs.target-os == 'dragonfly'
+
+      # Only what the steps below read, and checked: the FreeBSD aarch64
+      # guest damages data it reads as well as data it writes, so a copy
+      # that does not list cleanly is taken again.  The VM is still running;
+      # the action leaves it to the end of the job, and its ssh alias is the
+      # name of the OS.
+      - name: 'Copy the test results back from the FreeBSD aarch64 guest'
+        run: |
+          for n in 1 2 3; do
+            if ssh freebsd "cd '$GITHUB_WORKSPACE' && find build \( -name '*.jtr' -o -name summary.txt -o -name stats.txt -o -name 'hs_err_pid*.log' -o -name 'replay_pid*.log' -o -path '*/make-support/exit-with-error' -o -path '*/test-results/*' \) -type f -print | tar -czf - -T -" > results.tgz &&
+               tar -tzf results.tgz > /dev/null; then
+              tar -xzf results.tgz
+              rm -f results.tgz
+              exit 0
+            fi
+            echo "copy $n of the results came back damaged"
+          done
+          exit 1
+        if: always() && inputs.target-os == 'freebsd' && inputs.arch == 'aarch64'
 
       - name: 'Package test results'
         run: |
@@ -269,7 +391,7 @@ jobs:
       - name: 'Upload test results'
         uses: actions/upload-artifact@v6
         with:
-          name: results-${{ inputs.platform }}-${{ matrix.test-slug }}
+          name: results-${{ inputs.platform }}-${{ matrix.test-slug }}-${{ matrix.shard }}
           path: results
           retention-days: 14
         if: always()
