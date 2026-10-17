@@ -443,6 +443,34 @@ void os_getCmdlineAndUserInfo(JNIEnv *env, jobject jinfo, pid_t pid) {
     char cmd[MAXPATHLEN];
     jstring cmdexe = NULL;
 
+#ifdef __DragonFly__
+    // DragonFly 6.4's kern.proc.pathname calls cache_fullpath() on the
+    // process's text vnode even once exit1() has run fdfree() and left
+    // p_fd NULL, and the kernel stops there -- the whole machine, not this
+    // call.  tier1's ProcessHandle InfoTest asks for the path of a child
+    // it has just killed, and froze the guest within seconds in six runs
+    // of eight.  P_WEXIT is set at the top of exit1(), before fdfree(), so
+    // a process that is exiting, or already a zombie, or a kernel thread,
+    // gets no path asked for: it has no command line worth reporting
+    // anyway.  That leaves a window only between this lookup and the next;
+    // closing it needs the kernel to check p_fd itself.
+    {
+#ifndef P_SYSTEM
+#define P_SYSTEM 0x00200
+#endif
+#ifndef P_WEXIT
+#define P_WEXIT 0x02000
+#endif
+        struct kinfo_proc kp;
+        size_t kpsize = sizeof(kp);
+        int kpmib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, pid };
+        if (sysctl(kpmib, 4, &kp, &kpsize, NULL, 0) == -1 || kpsize == 0 ||
+            kp.kp_stat == SZOMB || (kp.kp_flags & (P_WEXIT | P_SYSTEM)) != 0) {
+            return;
+        }
+    }
+#endif
+
     // Get the resolved name of the executable.  NetBSD reaches both the
     // path and the arguments through KERN_PROC_ARGS with the pid third,
     // where FreeBSD and macOS reach them through KERN_PROC with the pid
