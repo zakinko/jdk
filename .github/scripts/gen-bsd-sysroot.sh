@@ -152,6 +152,14 @@ case "$os" in
       *) unsupported ;;
     esac
     base=https://cdn.netbsd.org/pub/NetBSD/NetBSD-$netbsd_release/$port/binary/sets
+    # A release that is no longer current leaves the CDN for the archive
+    # under the same layout: in October 2026 every NetBSD-10.1 set on
+    # cdn.netbsd.org answered 404.  Take it from there rather than moving
+    # the build to another release than the one the VMs boot.
+    if ! curl -fsSI --retry 3 --max-time 60 "$base/base.$ext" > /dev/null; then
+      base=https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-$netbsd_release/$port/binary/sets
+      echo "NetBSD-$netbsd_release is not on the CDN; using $base"
+    fi
     # NetBSD is the one BSD here that ships X11 as ordinary sets, so a
     # headful build can be cross-compiled for it.  They cost about 20MB
     # and a headless build simply does not look at them.
