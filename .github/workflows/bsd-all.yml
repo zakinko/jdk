@@ -20,6 +20,10 @@ on:
   push:
     branches:
       - claude/eloquent-dirac-pfg00n
+    # A push that only changes the aarch64 emulation probe runs the probe,
+    # not every BSD's build and tier1.
+    paths-ignore:
+      - '.github/workflows/aarch64-probe.yml'
   workflow_dispatch:
 
 # No run-wide concurrency: a push would then cancel tier1, which takes
