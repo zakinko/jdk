@@ -276,9 +276,17 @@ case `uname -m` in
     #   ran out of 1440 seconds on FreeBSD, as did java/foreign/
     #   TestUpcallStress, still finishing a case a second at case 712
     # One of them is enough to take a shard past the six-hour job limit,
-    # and the rest of its tests with it.  Whether the emulation or the port
-    # is to blame is not settled; leave them out here so that the rest is
-    # tested, and settle it on hardware.
+    # and the rest of its tests with it.  The emulation is to blame:
+    # .github/workflows/aarch64-probe.yml ran them on Linux aarch64, built
+    # from this tree, in an Ubuntu guest booted the same way on the same
+    # runner, and they stalled there the same way.  ParkALot stopped at
+    # "=> 9362 of 300000" for four hours with every ForkJoinPool worker
+    # parked in awaitWork, JSR166TestCase failed case after case with
+    # "ForkJoin common pool thread stuck", SubmissionTest with "Submitted
+    # task failed to execute", and PingPong#ltq, forkjoin/Starvation,
+    # GatherersMapConcurrentTest and CancelTimerWithContention ran into
+    # their timeouts with work queued and no worker running it.  Leave
+    # them out here so that the rest is tested.
     if [ -s "$PWD/shard-tests.txt" ]; then
       grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|CancelTimerWithContention|Thread/virtual/stress/[A-Za-z0-9]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest|Exchanger/ExchangeLoops|jshell/ToolProviderTest|jshell/MultipleDocumentationTest|jshell/JdiFailingLaunchExecutionControlTest|jshell/ToolTabSnippetTest|jshell/JdiStarterTest|javac/file/zip/T6836682|foreign/TestUpcallStress)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
