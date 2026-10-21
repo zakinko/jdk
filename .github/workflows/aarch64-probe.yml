@@ -1,0 +1,145 @@
+#
+# The aarch64 BSD guests leave out a set of tests that stop making progress
+# there (see the list in .github/scripts/bsd-tier1-in-vm.sh): those guests
+# run under QEMU without acceleration, since the arm runners have no
+# /dev/kvm, and on all three BSDs the same tests stall while the x86_64
+# guests of the same BSDs pass them.  Whether the emulation or the BSD port
+# is to blame was left open.
+#
+# This runs the same tests on Linux aarch64, built from this tree, in a
+# guest of the same kind: booted by the same vmactions/anyvm on the same
+# runner, emulated the same way (-cpu max, as for the FreeBSD and OpenBSD
+# guests), with the same four CPUs, the same 8 GB and the same jtreg
+# timeout factor.  Linux aarch64 passes these tests on hardware, so a test
+# that stalls here as well stalls for the emulation, and one that does not
+# is the BSD port's to explain.
+#
+name: 'aarch64 emulation probe'
+
+on:
+  push:
+    branches:
+      - claude/eloquent-dirac-pfg00n
+    paths:
+      - '.github/workflows/aarch64-probe.yml'
+  workflow_dispatch:
+
+jobs:
+  jtreg:
+    name: jtreg
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 'Checkout the scripts'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: |
+            .github
+            make/conf/github-actions.conf
+
+      - name: 'Build JTReg'
+        uses: ./.github/actions/build-jtreg
+
+  build:
+    name: linux-aarch64
+    needs: jtreg
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      platform: linux-aarch64
+      runs-on: 'ubuntu-24.04-arm'
+      bootjdk-platform: linux-aarch64
+      gcc-major-version: '14'
+      debug-levels: '[ "release" ]'
+
+  probe:
+    name: probe (${{ matrix.group }})
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 350
+
+    # One group a job, so that a test that stalls into its timeout -- which
+    # the factor of twelve stretches to four hours for ParkALot -- does not
+    # take the others' time with it.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: 'ParkALot'
+            tests: >-
+              test/jdk/java/lang/Thread/virtual/stress/ParkALot.java
+          - group: 'JSR166TestCase'
+            tests: >-
+              test/jdk/java/util/concurrent/tck/JSR166TestCase.java
+          - group: 'ForkJoin'
+            tests: >-
+              test/jdk/java/lang/Thread/virtual/MonitorEnterExit.java
+              test/jdk/java/util/concurrent/forkjoin/SubmissionTest.java
+              test/jdk/java/util/concurrent/forkjoin/Starvation.java
+              test/jdk/java/lang/Thread/virtual/Starvation.java
+              test/jdk/java/util/stream/GatherersMapConcurrentTest.java
+          - group: 'virtual stress'
+            tests: >-
+              test/jdk/java/lang/Thread/virtual/stress/Skynet100kWithMonitors.java
+              test/jdk/java/lang/Thread/virtual/stress/TimedWaitALot.java
+              test/jdk/java/lang/Thread/virtual/stress/PingPong.java
+              test/jdk/java/util/concurrent/Exchanger/ExchangeLoops.java
+              test/jdk/java/lang/Thread/virtual/CancelTimerWithContention.java
+          - group: 'jshell'
+            tests: >-
+              test/langtools/jdk/jshell/JdiStarterTest.java
+              test/langtools/jdk/jshell/ToolTabSnippetTest.java
+
+    steps:
+      - name: 'Checkout the JDK source'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: 'Get JTReg'
+        uses: ./.github/actions/get-jtreg
+
+      - name: 'Get bundles'
+        uses: ./.github/actions/get-bundles
+        with:
+          platform: linux-aarch64
+
+      - name: 'Leave the symbols and the archives out of the guest'
+        run: rm -rf bundles/symbols bundles/*.tar.gz
+
+      - name: 'Say whether this runner can accelerate a guest'
+        run: |
+          echo "runner: ${{ runner.os }} ${{ runner.arch }}"
+          ls -l /dev/kvm || echo "/dev/kvm: absent, the guest will be emulated"
+
+      - name: 'Run the tests in a Linux aarch64 virtual machine'
+        uses: vmactions/ubuntu-vm@v1
+        with:
+          release: '24.04'
+          arch: aarch64
+          mem: 8192
+          cpu: 4
+          copyback: false
+          envs: 'PROBE_TESTS'
+          run: |
+            set -x
+            uname -a
+            nproc
+            grep -m1 -i '^features' /proc/cpuinfo || :
+            JDK="$PWD/bundles/jdk/`ls bundles/jdk`"
+            TESTS="$PWD/bundles/tests"
+            JT="$PWD/jtreg/installed"
+            "$JDK/bin/java" -version
+            rc=0
+            "$JDK/bin/java" -jar "$JT/lib/jtreg.jar" -jdk:"$JDK" -agentvm \
+              -conc:4 -timeoutFactor:12 -verbose:fail,error,time \
+              -javaoption:-XX:-CreateCoredumpOnCrash \
+              -nativepath:"$TESTS/jdk/jtreg/native" \
+              -w work -r report $PROBE_TESTS || rc=$?
+            set +x
+            echo "jtreg exited with $rc"
+            echo "--- how far the tests that print their progress got ---"
+            find work -name '*.jtr' | while read -r f; do
+              echo "== $f"
+              grep -E '^(elapsed|test result:)|=> [0-9]+ of [0-9]+' "$f" | tail -5
+            done
+            echo "--- summary ---"
+            cat report/text/summary.txt || :
+        env:
+          PROBE_TESTS: ${{ matrix.tests }}
