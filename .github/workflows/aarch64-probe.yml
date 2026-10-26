@@ -9,16 +9,16 @@
 #
 # This looks for QEMU settings under which they do not stall, so that the
 # BSD guests can be run with them and the tests put back.  Each variant
-# boots the same Ubuntu guest and runs the same tests twice; anyvm has no
-# option for the TCG thread model or, through the VM action, the CPU model,
-# so a wrapper in front of qemu-system-aarch64 rewrites its command line.
-#   mttcg      what the guests get now: cortex-a72 (anyvm's model for
-#              Ubuntu and NetBSD 10.1), four CPUs, one host thread each
-#   single     the same, with every vCPU on one host thread
-#              (-accel tcg,thread=single)
-#   one-cpu    one CPU, so nothing runs in parallel in the guest
-#   max        -cpu max, which adds the ARMv8.1 atomics (LSE), so CAS is
-#              no longer a load-exclusive/store-exclusive loop
+# boots the same Ubuntu guest and runs the same tests twice.  The runner's
+# QEMU is 8.2.2 (Ubuntu's 1:8.2.2+ds-0ubuntu1.18); on it, neither -cpu max,
+# whose ARMv8.1 atomics make CAS one instruction, nor anything but a single
+# CPU kept the tests going, and with one CPU three of the six still ran out
+# of time.  So the variants here run a newer QEMU, built from its release
+# tarball, with anyvm's CPU model for Ubuntu and NetBSD 10.1 (cortex-a72)
+# and with -cpu max.  anyvm finds QEMU on PATH and has no option for the
+# CPU model through the VM action, so a wrapper ahead of the runner's
+# qemu-system-aarch64 starts the chosen QEMU with the chosen CPU and keeps
+# each command line for the log.
 #
 name: 'aarch64 emulation probe'
 
@@ -66,10 +66,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {variant: mttcg,   cpus: 4, tcg-thread: '',       cpu-type: ''}
-          - {variant: single,  cpus: 4, tcg-thread: 'single', cpu-type: ''}
-          - {variant: one-cpu, cpus: 1, tcg-thread: '',       cpu-type: ''}
-          - {variant: max,     cpus: 4, tcg-thread: '',       cpu-type: 'max'}
+          - {variant: qemu-11 cortex-a72, cpus: 4, qemu: '11.1.2', cpu-type: 'cortex-a72'}
+          - {variant: qemu-11 max,        cpus: 4, qemu: '11.1.2', cpu-type: 'max'}
 
     # The tests that stalled soonest in the first probe, with jtreg's
     # timeout factor at four so that a stall costs minutes, not hours.
@@ -105,32 +103,33 @@ jobs:
           echo "runner: ${{ runner.os }} ${{ runner.arch }}"
           ls -l /dev/kvm || echo "/dev/kvm: absent, the guest will be emulated"
 
+      - name: 'Build QEMU ${{ matrix.qemu }}'
+        if: matrix.qemu != ''
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build \
+            libglib2.0-dev libpixman-1-dev libslirp-dev python3-venv flex bison
+          curl -sSfL "https://download.qemu.org/qemu-${{ matrix.qemu }}.tar.xz" | tar -xJf -
+          cd "qemu-${{ matrix.qemu }}"
+          ./configure --prefix=/opt/qemu --target-list=aarch64-softmmu \
+            --enable-slirp --disable-docs --disable-werror
+          make -j"$(nproc)" > ../qemu-build.log 2>&1 || { tail -50 ../qemu-build.log; exit 1; }
+          sudo make install > /dev/null
+          cd ..
+          rm -rf "qemu-${{ matrix.qemu }}"
+          /opt/qemu/bin/qemu-system-aarch64 --version
+
       # anyvm finds QEMU on PATH, and /usr/local/bin comes before /usr/bin,
-      # where the VM action's apt-get puts it.  -machine carries accel=tcg,
-      # which QEMU will not take together with -accel, so it comes out of
-      # there when -accel goes in.  Every command line is kept, to show what
-      # the guest really ran with.
-      - name: 'Put the settings of this variant in front of QEMU'
-        if: matrix.tcg-thread != '' || matrix.cpu-type != ''
+      # where the VM action's apt-get puts the runner's.
+      - name: 'Put the QEMU and CPU of this variant in front of QEMU'
         run: |
           sudo tee /usr/local/bin/qemu-system-aarch64 > /dev/null <<'W'
           #!/bin/bash
-          TCG_THREAD='${{ matrix.tcg-thread }}'
+          QEMU='${{ matrix.qemu != '' && '/opt/qemu/bin/qemu-system-aarch64' || '/usr/bin/qemu-system-aarch64' }}'
           CPU_TYPE='${{ matrix.cpu-type }}'
           args=()
           while [ $# -gt 0 ]; do
             case "$1" in
-              -machine)
-                m=$2
-                if [ -n "$TCG_THREAD" ]; then
-                  m=${m/,accel=tcg/}
-                  m=${m/accel=tcg,/}
-                fi
-                args+=(-machine "$m")
-                if [ -n "$TCG_THREAD" ]; then
-                  args+=(-accel "tcg,thread=$TCG_THREAD")
-                fi
-                shift 2 ;;
               -cpu)
                 if [ -n "$CPU_TYPE" ] && [ "$2" != help ]; then
                   args+=(-cpu "$CPU_TYPE")
@@ -143,8 +142,8 @@ jobs:
                 shift ;;
             esac
           done
-          echo "${args[*]}" >> /tmp/qemu-command-lines.txt
-          exec /usr/bin/qemu-system-aarch64 "${args[@]}"
+          echo "$QEMU ${args[*]}" >> /tmp/qemu-command-lines.txt
+          exec "$QEMU" "${args[@]}"
           W
           sudo chmod 755 /usr/local/bin/qemu-system-aarch64
 
@@ -189,4 +188,4 @@ jobs:
 
       - name: 'Show the QEMU command line the guest ran with'
         if: always()
-        run: cat /tmp/qemu-command-lines.txt 2>/dev/null || echo "QEMU ran as anyvm started it"
+        run: cat /tmp/qemu-command-lines.txt
