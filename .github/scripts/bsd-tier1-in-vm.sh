@@ -285,8 +285,13 @@ case `uname -m` in
     # "ForkJoin common pool thread stuck", SubmissionTest with "Submitted
     # task failed to execute", and PingPong#ltq, forkjoin/Starvation,
     # GatherersMapConcurrentTest and CancelTimerWithContention ran into
-    # their timeouts with work queued and no worker running it.  Leave
-    # them out here so that the rest is tested.
+    # their timeouts with work queued and no worker running it.  No QEMU
+    # setting the probe tried keeps them going on four CPUs: not -cpu max,
+    # whose LSE atomics make CAS one instruction, and not QEMU 11.1.2 in
+    # place of the runner's 8.2.2.  With one CPU ParkALot, PingPong and
+    # SubmissionTest pass, and Starvation, GatherersMapConcurrentTest and
+    # CancelTimerWithContention still run out of time.  Leave them out
+    # here so that the rest is tested.
     if [ -s "$PWD/shard-tests.txt" ]; then
       grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|CancelTimerWithContention|Thread/virtual/stress/[A-Za-z0-9]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest|Exchanger/ExchangeLoops|jshell/ToolProviderTest|jshell/MultipleDocumentationTest|jshell/JdiFailingLaunchExecutionControlTest|jshell/ToolTabSnippetTest|jshell/JdiStarterTest|javac/file/zip/T6836682|foreign/TestUpcallStress)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
