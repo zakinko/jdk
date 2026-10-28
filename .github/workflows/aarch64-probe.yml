@@ -1,27 +1,30 @@
 #
 # The aarch64 BSD guests leave out a set of tests that stop making progress
-# there (see the list in .github/scripts/bsd-tier1-in-vm.sh): those guests
-# run under QEMU without acceleration, since the arm runners have no
-# /dev/kvm.  Linux aarch64, built from this tree, stalled the same way in
-# an Ubuntu guest booted the same way: tasks queued in a ForkJoinPool while
-# every worker stays parked in awaitWork, or no worker exists at all.  No
-# QEMU setting tried kept the tests going on four CPUs: not -cpu max, and
-# not QEMU 11.1.2.
+# there (see the list in .github/scripts/bsd-tier1-in-vm.sh): tasks queued
+# in a ForkJoinPool while every worker stays parked in awaitWork.  Earlier
+# versions of this workflow found that Linux aarch64 stalls the same way in
+# the same emulated guest, under QEMU 8.2.2 and 11.1.2, as cortex-a72 and
+# as max; that Linux aarch64 on the arm runner itself does not, held to
+# one core or with stress-ng keeping its cores busy; and that Linux x86_64
+# in a guest QEMU emulates on an x86_64 runner does not either.  Only
+# aarch64 under emulation stalls.
 #
-# This asks whose bug that is, QEMU's or the JDK's, two ways:
-#   aarch64 native, one core / overloaded
-#              The same tests on the arm runner itself, no emulation, but
-#              with the JVMs on one core while they size their pools for
-#              four, or with the cores kept busy by stress-ng.  Emulation
-#              makes threads stop for long stretches at any instruction;
-#              these make them do so on real hardware.  A stall here is a
-#              race in the JDK that the emulation only widens.
-#   x86_64 guest, emulated
-#              The same tests on Linux x86_64 in an Ubuntu guest that QEMU
-#              emulates, KVM taken away, on an x86_64 runner.  x86 orders
-#              memory more strictly than aarch64, so if the stall needs a
-#              reordering aarch64 allows, it goes away here; if it stays,
-#              timing alone causes it.
+# ForkJoinPool wakes a worker the way Dekker's algorithm does: the
+# submitter publishes the task and then reads whether a worker is idle,
+# the worker publishes that it is idle and then reads the queues; one of
+# them must see the other's store.  On aarch64 HotSpot makes a volatile
+# store a Store-Release (stlr) and a volatile load a Load-Acquire (ldar),
+# with no barrier between them, because the architecture orders a
+# Load-Acquire after an earlier Store-Release.  If the emulation lets the
+# load pass the store, both sides miss each other and the task waits for
+# good.
+#
+# This runs the store-buffering litmus test that asks exactly that, on the
+# runner and in the emulated guest: each thread stores to its own variable
+# and loads the other's, and both loads seeing 0 means a store was ordered
+# after the following load.  Without a barrier that is allowed, and the
+# plain variant shows the test can see it; with dmb ish, stlr;ldar, an
+# exclusive store-release, or casal, aarch64 forbids it.
 #
 name: 'aarch64 emulation probe'
 
@@ -34,156 +37,158 @@ on:
   workflow_dispatch:
 
 jobs:
-  jtreg:
-    name: jtreg
-    runs-on: ubuntu-24.04
-    steps:
-      - name: 'Checkout the scripts'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          sparse-checkout: |
-            .github
-            make/conf/github-actions.conf
-
-      - name: 'Build JTReg'
-        uses: ./.github/actions/build-jtreg
-
-  build-aarch64:
-    name: linux-aarch64
-    needs: jtreg
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      platform: linux-aarch64
-      runs-on: 'ubuntu-24.04-arm'
-      bootjdk-platform: linux-aarch64
-      gcc-major-version: '14'
-      debug-levels: '[ "release" ]'
-
-  build-x64:
-    name: linux-x64
-    needs: jtreg
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      platform: linux-x64
-      gcc-major-version: '10'
-      debug-levels: '[ "release" ]'
-
-  probe:
-    name: probe (${{ matrix.variant }})
-    needs: [build-aarch64, build-x64]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 350
+  litmus:
+    name: litmus (guest as ${{ matrix.cpu-type }})
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
 
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - variant: 'aarch64 native, one core'
-            runner: ubuntu-24.04-arm
-            platform: linux-aarch64
-            where: native
-            wrap: 'taskset -c 0'
-            javaopts: '-XX:ActiveProcessorCount=4'
-          - variant: 'aarch64 native, overloaded'
-            runner: ubuntu-24.04-arm
-            platform: linux-aarch64
-            where: native
-            load: 16
-          - variant: 'x86_64 guest, emulated'
-            runner: ubuntu-24.04
-            platform: linux-x64
-            where: guest
-
-    # The tests that stalled soonest in the emulated aarch64 guest.
-    env:
-      PROBE_TESTS: >-
-        test/jdk/java/lang/Thread/virtual/stress/ParkALot.java
-        test/jdk/java/lang/Thread/virtual/stress/PingPong.java
-        test/jdk/java/util/concurrent/forkjoin/SubmissionTest.java
-        test/jdk/java/util/concurrent/forkjoin/Starvation.java
-        test/jdk/java/util/stream/GatherersMapConcurrentTest.java
-        test/jdk/java/lang/Thread/virtual/CancelTimerWithContention.java
-      PROBE_WRAP: ${{ matrix.wrap }}
-      PROBE_JAVAOPTS: ${{ matrix.javaopts }}
+        cpu-type: [cortex-a72, max]
 
     steps:
-      - name: 'Checkout the JDK source'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: 'Get JTReg'
-        uses: ./.github/actions/get-jtreg
-
-      - name: 'Get bundles'
-        uses: ./.github/actions/get-bundles
-        with:
-          platform: ${{ matrix.platform }}
-
-      - name: 'Leave the symbols and the archives out'
-        run: rm -rf bundles/symbols bundles/*.tar.gz
-
-      # The same script runs on the runner and in the guest.  Each round
-      # reports, per test, how long it ran, how far it got and whether its
-      # thread dump has workers parked in awaitWork.
-      - name: 'Write the script that runs the tests'
+      - name: 'Write the litmus test'
         run: |
-          cat > probe-tests.sh <<'S'
-          JDK="$PWD/bundles/jdk/`ls bundles/jdk`"
-          TESTS="$PWD/bundles/tests"
-          JT="$PWD/jtreg/installed"
-          uname -a
-          nproc
-          grep -m1 -iE '^(features|flags)' /proc/cpuinfo | cut -c1-300 || :
-          "$JDK/bin/java" -version
-          for round in 1 2; do
-            echo "=== round $round ==="
-            rc=0
-            $PROBE_WRAP "$JDK/bin/java" -jar "$JT/lib/jtreg.jar" -jdk:"$JDK" -agentvm \
-              -conc:4 -timeoutFactor:4 -verbose:fail,error,time \
-              -javaoptions:"-XX:-CreateCoredumpOnCrash $PROBE_JAVAOPTS" \
-              -nativepath:"$TESTS/jdk/jtreg/native" \
-              -w work$round -r report$round $PROBE_TESTS > jtreg$round.log 2>&1 || rc=$?
-            echo "jtreg exited with $rc"
-            echo "--- how far each test got, and how long it took ---"
-            find work$round -name '*.jtr' | sort | while read -r f; do
-              echo "== $f"
-              grep -E '^(elapsed|test result:)' "$f"
-              grep -E '=> [0-9]+ of [0-9]+|T1 [0-9]+ of [0-9]+' "$f" | tail -2
-              grep -E 'awaitWork|Submitted task failed|timed out' "$f" | sort | uniq -c | head -5
-            done
-            echo "--- summary ---"
-            cat report$round/text/summary.txt || :
+          cat > sb.c <<'C'
+          /*
+           * Store buffering: each thread stores 1 to its own variable, then loads
+           * the other's.  r0 == 0 && r1 == 0 together means a store was ordered
+           * after the load that follows it in program order.  Variants:
+           *   plain    str; ldr            allowed on aarch64 (and on x86)
+           *   dmb      str; dmb ish; ldr   forbidden
+           *   rel-acq  stlr; ldar          forbidden: a Load-Acquire is ordered
+           *                                after an earlier Store-Release (RCsc)
+           *   llsc     ldaxr/stlxr; ldar   forbidden: the exchange HotSpot makes
+           *                                without LSE, then a Load-Acquire
+           *   casal    casal; ldar         forbidden (needs LSE)
+           */
+          #include <pthread.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #if defined(__aarch64__)
+          #include <sys/auxv.h>
+          #include <asm/hwcap.h>
+          #endif
+
+          #define N 20000
+
+          static volatile long x[N], y[N];
+          static long r0[N], r1[N];
+          static volatile int go[2], done[2];
+          static int variant;
+
+          #if defined(__aarch64__)
+          static inline void st_ld(volatile long *s, volatile long *l, long *r) {
+            long v = 1, t;
+            switch (variant) {
+            case 0: __asm__ volatile("str %2, [%1]\n ldr %0, [%3]" : "=&r"(t) : "r"(s), "r"(v), "r"(l) : "memory"); break;
+            case 1: __asm__ volatile("str %2, [%1]\n dmb ish\n ldr %0, [%3]" : "=&r"(t) : "r"(s), "r"(v), "r"(l) : "memory"); break;
+            case 2: __asm__ volatile("stlr %2, [%1]\n ldar %0, [%3]" : "=&r"(t) : "r"(s), "r"(v), "r"(l) : "memory"); break;
+            case 3: { long old;
+              __asm__ volatile("1: ldaxr %1, [%2]\n stlxr w9, %3, [%2]\n cbnz w9, 1b\n ldar %0, [%4]"
+                               : "=&r"(t), "=&r"(old) : "r"(s), "r"(v), "r"(l) : "x9", "memory"); } break;
+            default: { long old = 0;
+              __asm__ volatile(".arch armv8.1-a\n casal %1, %3, [%2]\n ldar %0, [%4]" : "=&r"(t), "+&r"(old) : "r"(s), "r"(v), "r"(l) : "memory"); } break;
+            }
+            *r = t;
+          }
+          static const char *names[] = { "plain str;ldr", "str;dmb ish;ldr", "stlr;ldar", "ldaxr/stlxr;ldar", "casal;ldar" };
+          static int nvariants = 5;
+          #else
+          static inline void st_ld(volatile long *s, volatile long *l, long *r) {
+            if (variant == 0) { *s = 1; __asm__ volatile("" ::: "memory"); *r = *l; }
+            else { *s = 1; __asm__ volatile("mfence" ::: "memory"); *r = *l; }
+          }
+          static const char *names[] = { "plain mov;mov", "mov;mfence;mov" };
+          static int nvariants = 2;
+          #endif
+
+          static void *run(void *arg) {
+            int me = (int)(long)arg;
+            for (int round = 1; ; round++) {
+              while (go[me] != round) { if (go[me] < 0) return NULL; }
+              if (me == 0) for (int i = 0; i < N; i++) st_ld(&x[i], &y[i], &r0[i]);
+              else         for (int i = 0; i < N; i++) st_ld(&y[i], &x[i], &r1[i]);
+              __atomic_store_n(&done[me], round, __ATOMIC_SEQ_CST);
+            }
+          }
+
+          int main(int argc, char **argv) {
+            int rounds = argc > 1 ? atoi(argv[1]) : 200;
+            pthread_t t[2];
+          #if defined(__aarch64__)
+            if (!(getauxval(AT_HWCAP) & HWCAP_ATOMICS)) {
+              nvariants = 4;
+              printf("no LSE atomics here: casal left out\n");
+            }
+          #endif
+            for (int i = 0; i < 2; i++) pthread_create(&t[i], NULL, run, (void *)(long)i);
+            int round = 0;
+            for (variant = 0; variant < nvariants; variant++) {
+              long seen = 0, total = 0;
+              for (int k = 0; k < rounds; k++) {
+                memset((void *)x, 0, sizeof x); memset((void *)y, 0, sizeof y);
+                round++;
+                __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                go[0] = round; go[1] = round;
+                while (done[0] != round || done[1] != round) ;
+                __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                for (int i = 0; i < N; i++) { total++; if (r0[i] == 0 && r1[i] == 0) seen++; }
+              }
+              printf("%-18s r0=0 && r1=0 in %ld of %ld\n", names[variant], seen, total);
+              fflush(stdout);
+            }
+            go[0] = go[1] = -1;
+            return 0;
+          }
+          C
+
+      - name: 'Build it and run it on the runner'
+        run: |
+          gcc -O2 -static -pthread -o sb sb.c
+          grep -m1 -i '^features' /proc/cpuinfo
+          ./sb 200
+
+      # anyvm finds QEMU on PATH, and /usr/local/bin comes before /usr/bin,
+      # where the VM action's apt-get puts it.  anyvm makes the Ubuntu guest
+      # a cortex-a72; the wrapper gives it the CPU of this job.
+      - name: 'Put the CPU of this job in front of QEMU'
+        run: |
+          sudo tee /usr/local/bin/qemu-system-aarch64 > /dev/null <<'W'
+          #!/bin/bash
+          args=()
+          while [ $# -gt 0 ]; do
+            if [ "$1" = -cpu ] && [ "$2" != help ]; then
+              args+=(-cpu '${{ matrix.cpu-type }}')
+              shift 2
+            else
+              args+=("$1")
+              shift
+            fi
           done
-          echo "--- jtreg's own output, round 1 (last 300 lines) ---"
-          tail -300 jtreg1.log
-          S
+          echo "${args[*]}" >> /tmp/qemu-command-lines.txt
+          exec /usr/bin/qemu-system-aarch64 "${args[@]}"
+          W
+          sudo chmod 755 /usr/local/bin/qemu-system-aarch64
 
-      - name: 'Keep the cores busy'
-        if: matrix.load != ''
-        run: |
-          sudo apt-get install -y -q --no-install-recommends stress-ng
-          nohup stress-ng --cpu ${{ matrix.load }} --timeout 330m > /dev/null 2>&1 &
-          sleep 5
-          uptime
-
-      - name: 'Run the tests on the runner'
-        if: matrix.where == 'native'
-        run: sh probe-tests.sh
-
-      # The VM action makes /dev/kvm writable when it is there, and anyvm
-      # uses KVM when it can; without the device both fall back to TCG.
-      - name: 'Take KVM away'
-        if: matrix.where == 'guest'
-        run: |
-          sudo mv /dev/kvm /dev/kvm.unused
-          ls -l /dev/kvm || echo "/dev/kvm: absent, the guest will be emulated"
-
-      - name: 'Run the tests in an emulated Linux x86_64 virtual machine'
-        if: matrix.where == 'guest'
+      - name: 'Run it in an emulated Linux aarch64 virtual machine'
         uses: vmactions/ubuntu-vm@v1
         with:
           release: '24.04'
+          arch: aarch64
           mem: 8192
           cpu: 4
           copyback: false
-          envs: 'PROBE_TESTS PROBE_WRAP PROBE_JAVAOPTS'
-          run: sh probe-tests.sh
+          run: |
+            uname -a
+            nproc
+            grep -m1 -i '^features' /proc/cpuinfo
+            ./sb 200
+
+      - name: 'Show the QEMU command line the guest ran with'
+        if: always()
+        run: |
+          /usr/bin/qemu-system-aarch64 --version | head -1
+          cat /tmp/qemu-command-lines.txt
