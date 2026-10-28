@@ -2,23 +2,26 @@
 # The aarch64 BSD guests leave out a set of tests that stop making progress
 # there (see the list in .github/scripts/bsd-tier1-in-vm.sh): those guests
 # run under QEMU without acceleration, since the arm runners have no
-# /dev/kvm.  Run on Linux aarch64, built from this tree, in an Ubuntu guest
-# that the same anyvm boots on the same runner, the same tests stalled the
-# same way, so the emulation stalls them, not the BSD port: tasks queued in
-# a ForkJoinPool while every worker stays parked in awaitWork.
+# /dev/kvm.  Linux aarch64, built from this tree, stalled the same way in
+# an Ubuntu guest booted the same way: tasks queued in a ForkJoinPool while
+# every worker stays parked in awaitWork, or no worker exists at all.  No
+# QEMU setting tried kept the tests going on four CPUs: not -cpu max, and
+# not QEMU 11.1.2.
 #
-# This looks for QEMU settings under which they do not stall, so that the
-# BSD guests can be run with them and the tests put back.  Each variant
-# boots the same Ubuntu guest and runs the same tests twice.  The runner's
-# QEMU is 8.2.2 (Ubuntu's 1:8.2.2+ds-0ubuntu1.18); on it, neither -cpu max,
-# whose ARMv8.1 atomics make CAS one instruction, nor anything but a single
-# CPU kept the tests going, and with one CPU three of the six still ran out
-# of time.  So the variants here run a newer QEMU, built from its release
-# tarball, with anyvm's CPU model for Ubuntu and NetBSD 10.1 (cortex-a72)
-# and with -cpu max.  anyvm finds QEMU on PATH and has no option for the
-# CPU model through the VM action, so a wrapper ahead of the runner's
-# qemu-system-aarch64 starts the chosen QEMU with the chosen CPU and keeps
-# each command line for the log.
+# This asks whose bug that is, QEMU's or the JDK's, two ways:
+#   aarch64 native, one core / overloaded
+#              The same tests on the arm runner itself, no emulation, but
+#              with the JVMs on one core while they size their pools for
+#              four, or with the cores kept busy by stress-ng.  Emulation
+#              makes threads stop for long stretches at any instruction;
+#              these make them do so on real hardware.  A stall here is a
+#              race in the JDK that the emulation only widens.
+#   x86_64 guest, emulated
+#              The same tests on Linux x86_64 in an Ubuntu guest that QEMU
+#              emulates, KVM taken away, on an x86_64 runner.  x86 orders
+#              memory more strictly than aarch64, so if the stall needs a
+#              reordering aarch64 allows, it goes away here; if it stays,
+#              timing alone causes it.
 #
 name: 'aarch64 emulation probe'
 
@@ -45,7 +48,7 @@ jobs:
       - name: 'Build JTReg'
         uses: ./.github/actions/build-jtreg
 
-  build:
+  build-aarch64:
     name: linux-aarch64
     needs: jtreg
     uses: ./.github/workflows/build-linux.yml
@@ -56,24 +59,42 @@ jobs:
       gcc-major-version: '14'
       debug-levels: '[ "release" ]'
 
+  build-x64:
+    name: linux-x64
+    needs: jtreg
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      platform: linux-x64
+      gcc-major-version: '10'
+      debug-levels: '[ "release" ]'
+
   probe:
     name: probe (${{ matrix.variant }})
-    needs: build
-    runs-on: ubuntu-24.04-arm
+    needs: [build-aarch64, build-x64]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 350
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {variant: qemu-11 cortex-a72, cpus: 4, qemu: '11.1.2', cpu-type: 'cortex-a72'}
-          - {variant: qemu-11 max,        cpus: 4, qemu: '11.1.2', cpu-type: 'max'}
+          - variant: 'aarch64 native, one core'
+            runner: ubuntu-24.04-arm
+            platform: linux-aarch64
+            where: native
+            wrap: 'taskset -c 0'
+            javaopts: '-XX:ActiveProcessorCount=4'
+          - variant: 'aarch64 native, overloaded'
+            runner: ubuntu-24.04-arm
+            platform: linux-aarch64
+            where: native
+            load: 16
+          - variant: 'x86_64 guest, emulated'
+            runner: ubuntu-24.04
+            platform: linux-x64
+            where: guest
 
-    # The tests that stalled soonest in the first probe, with jtreg's
-    # timeout factor at four so that a stall costs minutes, not hours.
-    # ParkALot stopped advancing seconds into its run; PingPong#ltq within
-    # two minutes; SubmissionTest waits two minutes for a task that never
-    # runs.
+    # The tests that stalled soonest in the emulated aarch64 guest.
     env:
       PROBE_TESTS: >-
         test/jdk/java/lang/Thread/virtual/stress/ParkALot.java
@@ -82,6 +103,8 @@ jobs:
         test/jdk/java/util/concurrent/forkjoin/Starvation.java
         test/jdk/java/util/stream/GatherersMapConcurrentTest.java
         test/jdk/java/lang/Thread/virtual/CancelTimerWithContention.java
+      PROBE_WRAP: ${{ matrix.wrap }}
+      PROBE_JAVAOPTS: ${{ matrix.javaopts }}
 
     steps:
       - name: 'Checkout the JDK source'
@@ -93,99 +116,74 @@ jobs:
       - name: 'Get bundles'
         uses: ./.github/actions/get-bundles
         with:
-          platform: linux-aarch64
+          platform: ${{ matrix.platform }}
 
-      - name: 'Leave the symbols and the archives out of the guest'
+      - name: 'Leave the symbols and the archives out'
         run: rm -rf bundles/symbols bundles/*.tar.gz
 
-      - name: 'Say whether this runner can accelerate a guest'
+      # The same script runs on the runner and in the guest.  Each round
+      # reports, per test, how long it ran, how far it got and whether its
+      # thread dump has workers parked in awaitWork.
+      - name: 'Write the script that runs the tests'
         run: |
-          echo "runner: ${{ runner.os }} ${{ runner.arch }}"
+          cat > probe-tests.sh <<'S'
+          JDK="$PWD/bundles/jdk/`ls bundles/jdk`"
+          TESTS="$PWD/bundles/tests"
+          JT="$PWD/jtreg/installed"
+          uname -a
+          nproc
+          grep -m1 -iE '^(features|flags)' /proc/cpuinfo | cut -c1-300 || :
+          "$JDK/bin/java" -version
+          for round in 1 2; do
+            echo "=== round $round ==="
+            rc=0
+            $PROBE_WRAP "$JDK/bin/java" -jar "$JT/lib/jtreg.jar" -jdk:"$JDK" -agentvm \
+              -conc:4 -timeoutFactor:4 -verbose:fail,error,time \
+              -javaoptions:"-XX:-CreateCoredumpOnCrash $PROBE_JAVAOPTS" \
+              -nativepath:"$TESTS/jdk/jtreg/native" \
+              -w work$round -r report$round $PROBE_TESTS > jtreg$round.log 2>&1 || rc=$?
+            echo "jtreg exited with $rc"
+            echo "--- how far each test got, and how long it took ---"
+            find work$round -name '*.jtr' | sort | while read -r f; do
+              echo "== $f"
+              grep -E '^(elapsed|test result:)' "$f"
+              grep -E '=> [0-9]+ of [0-9]+|T1 [0-9]+ of [0-9]+' "$f" | tail -2
+              grep -E 'awaitWork|Submitted task failed|timed out' "$f" | sort | uniq -c | head -5
+            done
+            echo "--- summary ---"
+            cat report$round/text/summary.txt || :
+          done
+          echo "--- jtreg's own output, round 1 (last 300 lines) ---"
+          tail -300 jtreg1.log
+          S
+
+      - name: 'Keep the cores busy'
+        if: matrix.load != ''
+        run: |
+          sudo apt-get install -y -q --no-install-recommends stress-ng
+          nohup stress-ng --cpu ${{ matrix.load }} --timeout 330m > /dev/null 2>&1 &
+          sleep 5
+          uptime
+
+      - name: 'Run the tests on the runner'
+        if: matrix.where == 'native'
+        run: sh probe-tests.sh
+
+      # The VM action makes /dev/kvm writable when it is there, and anyvm
+      # uses KVM when it can; without the device both fall back to TCG.
+      - name: 'Take KVM away'
+        if: matrix.where == 'guest'
+        run: |
+          sudo mv /dev/kvm /dev/kvm.unused
           ls -l /dev/kvm || echo "/dev/kvm: absent, the guest will be emulated"
 
-      - name: 'Build QEMU ${{ matrix.qemu }}'
-        if: matrix.qemu != ''
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ninja-build \
-            libglib2.0-dev libpixman-1-dev libslirp-dev python3-venv flex bison
-          curl -sSfL "https://download.qemu.org/qemu-${{ matrix.qemu }}.tar.xz" | tar -xJf -
-          cd "qemu-${{ matrix.qemu }}"
-          ./configure --prefix=/opt/qemu --target-list=aarch64-softmmu \
-            --enable-slirp --disable-docs --disable-werror
-          make -j"$(nproc)" > ../qemu-build.log 2>&1 || { tail -50 ../qemu-build.log; exit 1; }
-          sudo make install > /dev/null
-          cd ..
-          rm -rf "qemu-${{ matrix.qemu }}"
-          /opt/qemu/bin/qemu-system-aarch64 --version
-
-      # anyvm finds QEMU on PATH, and /usr/local/bin comes before /usr/bin,
-      # where the VM action's apt-get puts the runner's.
-      - name: 'Put the QEMU and CPU of this variant in front of QEMU'
-        run: |
-          sudo tee /usr/local/bin/qemu-system-aarch64 > /dev/null <<'W'
-          #!/bin/bash
-          QEMU='${{ matrix.qemu != '' && '/opt/qemu/bin/qemu-system-aarch64' || '/usr/bin/qemu-system-aarch64' }}'
-          CPU_TYPE='${{ matrix.cpu-type }}'
-          args=()
-          while [ $# -gt 0 ]; do
-            case "$1" in
-              -cpu)
-                if [ -n "$CPU_TYPE" ] && [ "$2" != help ]; then
-                  args+=(-cpu "$CPU_TYPE")
-                else
-                  args+=(-cpu "$2")
-                fi
-                shift 2 ;;
-              *)
-                args+=("$1")
-                shift ;;
-            esac
-          done
-          echo "$QEMU ${args[*]}" >> /tmp/qemu-command-lines.txt
-          exec "$QEMU" "${args[@]}"
-          W
-          sudo chmod 755 /usr/local/bin/qemu-system-aarch64
-
-      - name: 'Run the tests in a Linux aarch64 virtual machine'
+      - name: 'Run the tests in an emulated Linux x86_64 virtual machine'
+        if: matrix.where == 'guest'
         uses: vmactions/ubuntu-vm@v1
         with:
           release: '24.04'
-          arch: aarch64
           mem: 8192
-          cpu: ${{ matrix.cpus }}
+          cpu: 4
           copyback: false
-          envs: 'PROBE_TESTS'
-          run: |
-            uname -a
-            nproc
-            grep -m1 -i '^features' /proc/cpuinfo || :
-            JDK="$PWD/bundles/jdk/`ls bundles/jdk`"
-            TESTS="$PWD/bundles/tests"
-            JT="$PWD/jtreg/installed"
-            "$JDK/bin/java" -version
-            for round in 1 2; do
-              echo "=== round $round ==="
-              rc=0
-              "$JDK/bin/java" -jar "$JT/lib/jtreg.jar" -jdk:"$JDK" -agentvm \
-                -conc:4 -timeoutFactor:4 -verbose:fail,error,time \
-                -javaoption:-XX:-CreateCoredumpOnCrash \
-                -nativepath:"$TESTS/jdk/jtreg/native" \
-                -w work$round -r report$round $PROBE_TESTS > jtreg$round.log 2>&1 || rc=$?
-              echo "jtreg exited with $rc"
-              echo "--- how far each test got, and how long it took ---"
-              find work$round -name '*.jtr' | sort | while read -r f; do
-                echo "== $f"
-                grep -E '^(elapsed|test result:)' "$f"
-                grep -E '=> [0-9]+ of [0-9]+|T1 [0-9]+ of [0-9]+' "$f" | tail -2
-                grep -E 'awaitWork|Submitted task failed|timed out' "$f" | sort | uniq -c | head -5
-              done
-              echo "--- summary ---"
-              cat report$round/text/summary.txt || :
-            done
-            echo "--- jtreg's own output, round 1 (last 300 lines) ---"
-            tail -300 jtreg1.log
-
-      - name: 'Show the QEMU command line the guest ran with'
-        if: always()
-        run: cat /tmp/qemu-command-lines.txt
+          envs: 'PROBE_TESTS PROBE_WRAP PROBE_JAVAOPTS'
+          run: sh probe-tests.sh
