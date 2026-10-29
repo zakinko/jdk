@@ -12,16 +12,19 @@
 # 0 of 4000000 each, where plain str;ldr was reordered 252 times.  So the
 # memory model is emulated right, at least there.
 #
-# This cuts the stalls down to two small programs and runs them in the
-# emulated guest with parts of the JVM turned off, to find the part that
-# stalls: the interpreter alone, C1 alone, C2 alone, the Serial collector.
-#   Repro parkalot  a virtual thread parks again and again while a
-#                   platform thread unparks it (ParkALot, one thread)
-#   Repro submit    a task given to a fresh ForkJoinPool(1) must run
-#                   (SubmissionTest)
-#   condvar         two C threads hand a token over through a mutex and a
-#                   condition variable, as HotSpot's Parker does, to see
-#                   whether the guest loses a wakeup with no JVM at all
+# Two small programs then showed where: a virtual thread parked again and
+# again while a platform thread unparks it stalls in the emulated guest
+# by default, with C2 alone and with the Serial collector, and runs to
+# the end with -Xint and with C1 alone, in both rounds; a task given to a
+# fresh ForkJoinPool(1), and a C program handing a token over through a
+# mutex and condition variable, never stall.  C2's code is what stalls.
+#
+# This narrows that down with the park/unpark program alone: the
+# instruction C2 gives Thread.onSpinWait(), the merging of dmb
+# instructions, the instruction cache invalidation, and which classes
+# C2 compiles -- ForkJoinPool, VirtualThread, Continuation, LockSupport
+# and Unsafe, Thread, or the program's own -- each left to the
+# interpreter in turn.
 #
 name: 'aarch64 emulation probe'
 
@@ -215,16 +218,28 @@ jobs:
           uname -a
           nproc
           grep -m1 -i '^features' /proc/cpuinfo
-          ./repro/condvar 1000000
+          cat > repro/variants <<'V'
+          default
+          -XX:TieredStopAtLevel=1
+          -XX:+UnlockDiagnosticVMOptions -XX:OnSpinWaitInst=none
+          -XX:+UnlockDiagnosticVMOptions -XX:OnSpinWaitInst=isb
+          -XX:+UnlockDiagnosticVMOptions -XX:-AlwaysMergeDMB
+          -XX:+UnlockDiagnosticVMOptions -XX:+UseSingleICacheInvalidation
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool*::*
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.lang.VirtualThread*::*
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,jdk.internal.vm.Continuation*::*
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.locks.LockSupport::* -XX:CompileCommand=exclude,jdk.internal.misc.Unsafe::*
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.lang.Thread::*
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,Repro*::*
+          V
           for round in 1 2; do
-            for opts in "" "-Xint" "-XX:TieredStopAtLevel=1" "-XX:-TieredCompilation" "-XX:+UseSerialGC"; do
-              for t in "parkalot 100000" "submit 300"; do
-                start=`date +%s`
-                out=`timeout 1200 "$JAVA" $opts -cp repro Repro $t 2>&1 | tail -2 | tr '\n' ' '`
-                end=`date +%s`
-                echo "round $round | ${opts:-default} | $t | $((end - start))s | $out"
-              done
-            done
+            while read -r opts; do
+              [ "$opts" = default ] && o= || o=$opts
+              start=`date +%s`
+              out=`timeout 1200 "$JAVA" $o -cp repro Repro parkalot 100000 2>&1 < /dev/null | tail -2 | tr '\n' ' '`
+              end=`date +%s`
+              echo "round $round | $opts | $((end - start))s | $out"
+            done < repro/variants
           done
           S
 
