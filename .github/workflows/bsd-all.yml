@@ -150,6 +150,51 @@ jobs:
       - name: 'Build JTReg'
         uses: ./.github/actions/build-jtreg
 
+  # The aarch64 guests are emulated, and QEMU's aarch64 emulation lets a
+  # Load-Acquire go before an earlier Store-Release, which the architecture
+  # forbids.  C2 makes a volatile store an stlr and a volatile load an ldar
+  # with nothing between them, relying on that order, and in ForkJoinPool
+  # the submitter and an idle worker then miss each other's stores: tasks
+  # queue up while every worker stays parked in awaitWork.  aarch64-probe.yml
+  # traced it there: in the store-buffering litmus test stlr;ldar came out
+  # reordered 3007 and 3355 times in 4000000 in the guest and never on the
+  # arm runner, the same in QEMU 8.2.2 and 11.1.2.  translate-a64.c gives an
+  # STLR its barrier before the store and an LDAR its barrier after the
+  # load, leaving none between them.  Build QEMU once with a barrier before
+  # each load-acquire as well, for every aarch64 guest to run under.
+  qemu:
+    name: qemu
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: 'Checkout the patch'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: |
+            .github/patches
+
+      - name: 'Build QEMU 11.1.2 with the load-acquire barrier'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build \
+            libglib2.0-dev libpixman-1-dev libslirp-dev python3-venv flex bison
+          curl -sSfL https://download.qemu.org/qemu-11.1.2.tar.xz | tar -xJf -
+          cd qemu-11.1.2
+          patch -p1 < ../.github/patches/qemu-arm-load-acquire-barrier.patch
+          ./configure --prefix=/opt/qemu --target-list=aarch64-softmmu \
+            --enable-slirp --disable-docs --disable-werror
+          make -j"$(nproc)" > ../qemu-build.log 2>&1 || { tail -50 ../qemu-build.log; exit 1; }
+          sudo make install > /dev/null
+          cd ..
+          /opt/qemu/bin/qemu-system-aarch64 --version
+          tar -C /opt -czf qemu-aarch64.tar.gz qemu
+
+      - name: 'Upload it'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qemu-aarch64
+          path: qemu-aarch64.tar.gz
+          retention-days: 5
+
   # A guest whose machine differs from the runner's is emulated, so the
   # aarch64 ones go on an arm64 runner; that runner has no /dev/kvm either,
   # so they are emulated there too, only less so -- slowly enough that the
@@ -161,7 +206,7 @@ jobs:
   # fails at fetching its bundles, and the rest are not held back by it.
   tier1:
     name: tier1
-    needs: [jtreg, hotspot]
+    needs: [jtreg, hotspot, qemu]
     if: ${{ !cancelled() && needs.jtreg.result == 'success' }}
     concurrency:
       group: bsd-tier1-${{ github.ref }}-${{ matrix.platform }}

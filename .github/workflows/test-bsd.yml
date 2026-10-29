@@ -196,6 +196,30 @@ jobs:
           echo "runner: ${{ runner.os }} ${{ runner.arch }}"
           ls -l /dev/kvm || echo "/dev/kvm: absent, the guest will be emulated"
 
+      # The aarch64 guests run under QEMU with a barrier before each
+      # load-acquire, which bsd-all.yml builds; see the comment over its
+      # qemu job.  The VM actions' anyvm finds QEMU on PATH, and
+      # /usr/local/bin comes before /usr/bin, where their apt-get puts the
+      # runner's.  anyvm looks for the UEFI firmware next to QEMU and then
+      # in /usr/share, where that apt-get puts it too.
+      - name: 'Get the patched QEMU'
+        if: inputs.arch == 'aarch64'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: qemu-aarch64
+
+      - name: "Put the patched QEMU in front of the runner's"
+        if: inputs.arch == 'aarch64'
+        run: |
+          sudo tar -xzf qemu-aarch64.tar.gz -C /opt
+          rm qemu-aarch64.tar.gz
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libpixman-1-0 libslirp0
+          printf '#!/bin/sh\nexec /opt/qemu/bin/qemu-system-aarch64 "$@"\n' |
+            sudo tee /usr/local/bin/qemu-system-aarch64 > /dev/null
+          sudo chmod 755 /usr/local/bin/qemu-system-aarch64
+          qemu-system-aarch64 --version
+
       # One step per BSD, because each has its own action; what runs inside
       # is the same script on all four.  prepare installs what the
       # makefiles and the script need, plus what the JDK itself links
