@@ -53,7 +53,8 @@ unsupported() {
 fetch() {
   echo "fetching $2"
   curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors \
-      --max-time 1800 --speed-limit 10240 --speed-time 120 -o "$1" "$2"
+      --max-time 1800 --speed-limit 10240 --speed-time 120 -o "$1" "$2" ||
+    return
   ls -l "$1"
 }
 
@@ -96,11 +97,17 @@ case "$os" in
       *) unsupported ;;
     esac
     base=https://cdn.netbsd.org/pub/NetBSD/NetBSD-$netbsd_release/$port/binary/sets
+    # A release the mirrors no longer carry moves to the archive: 10.1's
+    # sets went from cdn.netbsd.org between 2026-10-15 and 2026-10-29,
+    #   fetching https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/amd64/binary/sets/base.tar.xz
+    #   curl: (22) The requested URL returned error: 404
+    archive=https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-$netbsd_release/$port/binary/sets
     # NetBSD is the one BSD here that ships X11 as ordinary sets, so a
     # headful build can be cross-compiled for it.  They cost about 20MB
     # and a headless build simply does not look at them.
     for set in base comp xbase xcomp; do
-      fetch "$set.$ext" "$base/$set.$ext"
+      fetch "$set.$ext" "$base/$set.$ext" ||
+        fetch "$set.$ext" "$archive/$set.$ext"
       extract "$set.$ext"
     done
     # The machines with no HotSpot port on BSD are built as Zero, which
