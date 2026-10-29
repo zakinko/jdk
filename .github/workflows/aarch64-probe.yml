@@ -2,34 +2,27 @@
 # The aarch64 BSD guests leave out a set of tests that stop making progress
 # there (see the list in .github/scripts/bsd-tier1-in-vm.sh): tasks queued
 # in a ForkJoinPool while every worker stays parked in awaitWork.  Earlier
-# versions of this workflow found that Linux aarch64 stalls the same way in
-# the same emulated guest, under QEMU 8.2.2 and 11.1.2, as cortex-a72 and
-# as max, but not on the arm runner itself, held to one core or with every
-# core kept busy, and not as x86_64 in a guest emulated on an x86_64
-# runner.  A store-buffering litmus test then found the emulated aarch64
-# guest ordering a Load-Acquire after a Store-Release, a load after
-# dmb ish, and after an exclusive store-release, as the architecture asks:
-# 0 of 4000000 each, where plain str;ldr was reordered 252 times.  So the
-# memory model is emulated right, at least there.
+# versions of this workflow narrowed that down: Linux aarch64 stalls the
+# same way in the same emulated guest but not on the arm runner itself;
+# it stalls when C2 compiles ForkJoinPool, and not with -Xint or C1 alone;
+# and keeping any one of ForkJoinPool.signalWork, ForkJoinPool.deactivate
+# or WorkQueue.push out of C2 is enough for it to run to the end.  Those
+# three are the two sides of ForkJoinPool's handshake: the submitter
+# stores a task and then reads ctl to see whether a worker is idle, the
+# worker CASes itself onto ctl as idle and then reads the queues with
+# plain loads.  One of them must see the other's store.
 #
-# Two small programs then showed where: a virtual thread parked again and
-# again while a platform thread unparks it stalls in the emulated guest
-# by default, with C2 alone and with the Serial collector, and runs to
-# the end with -Xint and with C1 alone, in both rounds; a task given to a
-# fresh ForkJoinPool(1), and a C program handing a token over through a
-# mutex and condition variable, never stall.  C2's code is what stalls.
+# Without the ARMv8.1 atomics C2 makes a CAS an ldaxr/stlxr loop with
+# no barrier after it: the stlxr is a release, which orders earlier
+# accesses before the store, but nothing orders the plain loads that
+# follow after it.  The emulated guest is a cortex-a72, without them;
+# the arm runner has them, so there C2 uses casal.
 #
-# With the park/unpark program alone, keeping ForkJoinPool's classes out
-# of the compilers made it run to the end in both rounds; changing the
-# instruction C2 gives Thread.onSpinWait(), leaving dmb instructions
-# unmerged, and keeping VirtualThread, Continuation, LockSupport with
-# Unsafe, Thread or the program's own classes out did not.
-#
-# This narrows it down to ForkJoinPool's methods: each of signalWork,
-# deactivate, awaitWork, runWorker, WorkQueue.push, all of WorkQueue, and
-# the submission path is kept out of the compilers and out of other
-# methods' inlined code in turn; and, last, all of ForkJoinPool is
-# compiled but nothing of it inlined.
+# This runs the store-buffering litmus test once more, on the runner and
+# in the emulated guest, as cortex-a72 and as max, with a CAS followed by
+# a plain load: ldaxr/stlxr;ldr, the same with dmb ish before the load,
+# and casal;ldr.  Both loads seeing 0 means the load went before the
+# CAS's store.
 #
 name: 'aarch64 emulation probe'
 
@@ -42,216 +35,157 @@ on:
   workflow_dispatch:
 
 jobs:
-  jtreg:
-    name: jtreg
-    runs-on: ubuntu-24.04
-    steps:
-      - name: 'Checkout the scripts'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          sparse-checkout: |
-            .github
-            make/conf/github-actions.conf
-
-      - name: 'Build JTReg'
-        uses: ./.github/actions/build-jtreg
-
-  build:
-    name: linux-aarch64
-    needs: jtreg
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      platform: linux-aarch64
-      runs-on: 'ubuntu-24.04-arm'
-      bootjdk-platform: linux-aarch64
-      gcc-major-version: '14'
-      debug-levels: '[ "release" ]'
-
-  probe:
-    name: probe
-    needs: build
+  litmus:
+    name: litmus (guest as ${{ matrix.cpu-type }})
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 350
+    timeout-minutes: 120
+
+    strategy:
+      fail-fast: false
+      matrix:
+        cpu-type: [cortex-a72, max]
 
     steps:
-      - name: 'Checkout the JDK source'
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          sparse-checkout: |
-            .github
-
-      - name: 'Get bundles'
-        uses: ./.github/actions/get-bundles
-        with:
-          platform: linux-aarch64
-
-      - name: 'Leave out what the guest does not need'
-        run: rm -rf bundles/symbols bundles/tests bundles/*.tar.gz
-
-      - name: 'Write the programs'
+      - name: 'Write the litmus test'
         run: |
-          mkdir -p repro
-          cat > repro/Repro.java <<'J'
-          import java.util.concurrent.CountDownLatch;
-          import java.util.concurrent.ForkJoinPool;
-          import java.util.concurrent.TimeUnit;
-          import java.util.concurrent.atomic.AtomicInteger;
-          import java.util.concurrent.locks.LockSupport;
-
-          /**
-           * The two stalls the emulated aarch64 guest shows, cut down to nothing but
-           * the JDK.  Prints PASS or STALL and exits.
-           *   parkalot N   a virtual thread parks N times, a platform thread unparks
-           *                it each time it waits (ParkALot with one thread)
-           *   submit N     N times: a task handed to a fresh ForkJoinPool(1) must run
-           *                within 60 seconds (SubmissionTest)
-           */
-          public class Repro {
-              public static void main(String[] args) throws Exception {
-                  int n = Integer.parseInt(args[1]);
-                  boolean ok = switch (args[0]) {
-                      case "parkalot" -> parkALot(n);
-                      case "submit" -> submit(n);
-                      default -> throw new IllegalArgumentException(args[0]);
-                  };
-                  System.out.println(ok ? "PASS" : "STALL");
-                  System.exit(ok ? 0 : 1);
-              }
-
-              static boolean parkALot(int n) throws Exception {
-                  AtomicInteger done = new AtomicInteger();
-                  Thread vthread = Thread.ofVirtual().start(() -> {
-                      boolean timed = false;
-                      for (int i = 0; i < n; i++) {
-                          if (timed) LockSupport.parkNanos(Long.MAX_VALUE); else LockSupport.park();
-                          timed = !timed;
-                          done.incrementAndGet();
-                      }
-                  });
-                  Thread unparker = Thread.ofPlatform().daemon().start(() -> {
-                      Thread.State s;
-                      while ((s = vthread.getState()) != Thread.State.TERMINATED) {
-                          if (s == Thread.State.WAITING || s == Thread.State.TIMED_WAITING) {
-                              LockSupport.unpark(vthread);
-                          } else {
-                              Thread.yield();
-                          }
-                      }
-                  });
-                  int last = -1;
-                  long stuckSince = System.nanoTime();
-                  while (!vthread.join(java.time.Duration.ofSeconds(1))) {
-                      int d = done.get();
-                      if (d != last) {
-                          last = d;
-                          stuckSince = System.nanoTime();
-                      } else if (System.nanoTime() - stuckSince > TimeUnit.SECONDS.toNanos(60)) {
-                          System.out.println("no progress for 60s at " + d + " of " + n
-                                  + ", virtual thread " + vthread.getState());
-                          return false;
-                      }
-                  }
-                  System.out.println(done.get() + " of " + n);
-                  return true;
-              }
-
-              static boolean submit(int n) throws Exception {
-                  for (int i = 0; i < n; i++) {
-                      ForkJoinPool pool = new ForkJoinPool(1);
-                      CountDownLatch ran = new CountDownLatch(1);
-                      pool.execute(ran::countDown);
-                      boolean ok = ran.await(60, TimeUnit.SECONDS);
-                      pool.shutdownNow();
-                      if (!ok) {
-                          System.out.println("task " + i + " of " + n + " did not run in 60s; pool: " + pool);
-                          return false;
-                      }
-                  }
-                  System.out.println(n + " of " + n);
-                  return true;
-              }
-          }
-          J
-          cat > repro/condvar.c <<'C'
+          cat > sb.c <<'C'
           /*
-           * Two threads hand a token back and forth through a mutex and a condition
-           * variable, the way HotSpot's Parker parks and unparks, N times.  A lost
-           * wakeup leaves both waiting; the main thread reports it.
+           * Store buffering: each thread stores 1 to its own variable, then loads
+           * the other's.  r0 == 0 && r1 == 0 together means a store was ordered
+           * after the load that follows it in program order.  Variants:
+           *   plain    str; ldr            allowed on aarch64 (and on x86)
+           *   dmb      str; dmb ish; ldr   forbidden
+           *   rel-acq  stlr; ldar          forbidden: a Load-Acquire is ordered
+           *                                after an earlier Store-Release (RCsc)
+           *   llsc     ldaxr/stlxr; ldar   forbidden: the exchange HotSpot makes
+           *                                without LSE, then a Load-Acquire
+           *   casal    casal; ldar         forbidden (needs LSE)
+           *   llsc-ldr ldaxr/stlxr; ldr    a CAS as C2 makes it without LSE, then a
+           *                                plain load: the release store does not
+           *                                order later loads, so allowed
+           *   casal-ldr casal; ldr         the same with LSE
+           *   llsc-dmb ldaxr/stlxr; dmb ish; ldr   forbidden
            */
           #include <pthread.h>
           #include <stdio.h>
           #include <stdlib.h>
-          #include <time.h>
-          #include <unistd.h>
+          #include <string.h>
+          #if defined(__aarch64__)
+          #include <sys/auxv.h>
+          #include <asm/hwcap.h>
+          #endif
 
-          static pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
-          static pthread_cond_t c[2] = { PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER };
-          static volatile int turn, n;
-          static volatile long count;
+          #define N 20000
+
+          static volatile long x[N], y[N];
+          static long r0[N], r1[N];
+          static volatile int go[2], done[2];
+          static int variant;
+
+          #if defined(__aarch64__)
+          static inline void st_ld(volatile long *s, volatile long *l, long *r) {
+            long v = 1, t;
+            switch (variant) {
+            case 0: __asm__ volatile("str %2, [%1]\n ldr %0, [%3]" : "=&r"(t) : "r"(s), "r"(v), "r"(l) : "memory"); break;
+            case 1: __asm__ volatile("str %2, [%1]\n dmb ish\n ldr %0, [%3]" : "=&r"(t) : "r"(s), "r"(v), "r"(l) : "memory"); break;
+            case 2: __asm__ volatile("stlr %2, [%1]\n ldar %0, [%3]" : "=&r"(t) : "r"(s), "r"(v), "r"(l) : "memory"); break;
+            case 3: { long old;
+              __asm__ volatile("1: ldaxr %1, [%2]\n stlxr w9, %3, [%2]\n cbnz w9, 1b\n ldar %0, [%4]"
+                               : "=&r"(t), "=&r"(old) : "r"(s), "r"(v), "r"(l) : "x9", "memory"); } break;
+            case 4: { long old;
+              __asm__ volatile("1: ldaxr %1, [%2]\n stlxr w9, %3, [%2]\n cbnz w9, 1b\n ldr %0, [%4]"
+                               : "=&r"(t), "=&r"(old) : "r"(s), "r"(v), "r"(l) : "x9", "memory"); } break;
+            case 5: { long old;
+              __asm__ volatile("1: ldaxr %1, [%2]\n stlxr w9, %3, [%2]\n cbnz w9, 1b\n dmb ish\n ldr %0, [%4]"
+                               : "=&r"(t), "=&r"(old) : "r"(s), "r"(v), "r"(l) : "x9", "memory"); } break;
+            case 6: { long old = 0;
+              __asm__ volatile(".arch armv8.1-a\n casal %1, %3, [%2]\n ldar %0, [%4]" : "=&r"(t), "+&r"(old) : "r"(s), "r"(v), "r"(l) : "memory"); } break;
+            default: { long old = 0;
+              __asm__ volatile(".arch armv8.1-a\n casal %1, %3, [%2]\n ldr %0, [%4]" : "=&r"(t), "+&r"(old) : "r"(s), "r"(v), "r"(l) : "memory"); } break;
+            }
+            *r = t;
+          }
+          static const char *names[] = { "plain str;ldr", "str;dmb ish;ldr", "stlr;ldar", "ldaxr/stlxr;ldar",
+                                          "ldaxr/stlxr;ldr", "ldaxr/stlxr;dmb;ldr", "casal;ldar", "casal;ldr" };
+          static int nvariants = 8;
+          #else
+          static inline void st_ld(volatile long *s, volatile long *l, long *r) {
+            if (variant == 0) { *s = 1; __asm__ volatile("" ::: "memory"); *r = *l; }
+            else { *s = 1; __asm__ volatile("mfence" ::: "memory"); *r = *l; }
+          }
+          static const char *names[] = { "plain mov;mov", "mov;mfence;mov" };
+          static int nvariants = 2;
+          #endif
 
           static void *run(void *arg) {
             int me = (int)(long)arg;
-            for (int i = 0; i < n; i++) {
-              pthread_mutex_lock(&m);
-              while (turn != me) pthread_cond_wait(&c[me], &m);
-              turn = 1 - me;
-              count++;
-              pthread_cond_signal(&c[1 - me]);
-              pthread_mutex_unlock(&m);
+            for (int round = 1; ; round++) {
+              while (go[me] != round) { if (go[me] < 0) return NULL; }
+              if (me == 0) for (int i = 0; i < N; i++) st_ld(&x[i], &y[i], &r0[i]);
+              else         for (int i = 0; i < N; i++) st_ld(&y[i], &x[i], &r1[i]);
+              __atomic_store_n(&done[me], round, __ATOMIC_SEQ_CST);
             }
-            return NULL;
           }
 
           int main(int argc, char **argv) {
-            n = argc > 1 ? atoi(argv[1]) : 1000000;
+            int rounds = argc > 1 ? atoi(argv[1]) : 200;
             pthread_t t[2];
-            for (int i = 0; i < 2; i++) pthread_create(&t[i], NULL, run, (void *)(long)i);
-            long last = -1;
-            int still = 0;
-            while (count < 2L * n) {
-              sleep(1);
-              if (count == last) {
-                if (++still >= 60) { printf("condvar: STALL at %ld of %ld\n", count, 2L * n); return 1; }
-              } else { still = 0; last = count; }
+          #if defined(__aarch64__)
+            if (!(getauxval(AT_HWCAP) & HWCAP_ATOMICS)) {
+              nvariants = 6;
+              printf("no LSE atomics here: casal left out\n");
             }
-            printf("condvar: PASS, %ld handoffs\n", count);
+          #endif
+            for (int i = 0; i < 2; i++) pthread_create(&t[i], NULL, run, (void *)(long)i);
+            int round = 0;
+            for (variant = 0; variant < nvariants; variant++) {
+              long seen = 0, total = 0;
+              for (int k = 0; k < rounds; k++) {
+                memset((void *)x, 0, sizeof x); memset((void *)y, 0, sizeof y);
+                round++;
+                __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                go[0] = round; go[1] = round;
+                while (done[0] != round || done[1] != round) ;
+                __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                for (int i = 0; i < N; i++) { total++; if (r0[i] == 0 && r1[i] == 0) seen++; }
+              }
+              printf("%-18s r0=0 && r1=0 in %ld of %ld\n", names[variant], seen, total);
+              fflush(stdout);
+            }
+            go[0] = go[1] = -1;
             return 0;
           }
           C
-          cat > repro/run.sh <<'S'
-          JAVA="$PWD/bundles/jdk/`ls bundles/jdk`/bin/java"
-          uname -a
-          nproc
-          grep -m1 -i '^features' /proc/cpuinfo
-          cat > repro/variants <<'V'
-          default
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::signalWork -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::signalWork
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::deactivate -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::deactivate
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::awaitWork -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::awaitWork
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::runWorker -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::runWorker
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool$WorkQueue::push -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool$WorkQueue::push
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool$WorkQueue::* -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool$WorkQueue::*
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::poolSubmit -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::poolSubmit -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::externalSubmit -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::externalSubmit -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::lazySubmit -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::lazySubmit -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::submissionQueue -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::submissionQueue
-          -XX:CompileCommand=quiet -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool*::*
-          V
-          for round in 1 2; do
-            while read -r opts; do
-              [ "$opts" = default ] && o= || o=$opts
-              start=`date +%s`
-              out=`timeout 1200 "$JAVA" $o -cp repro Repro parkalot 100000 2>&1 < /dev/null | tail -2 | tr '\n' ' '`
-              end=`date +%s`
-              echo "round $round | $opts | $((end - start))s | $out"
-            done < repro/variants
-          done
-          S
 
-      - name: 'Build the programs and run them on the runner'
+      - name: 'Build it and run it on the runner'
         run: |
-          gcc -O2 -static -pthread -o repro/condvar repro/condvar.c
-          "bundles/jdk/`ls bundles/jdk`/bin/javac" -d repro repro/Repro.java
-          sh repro/run.sh
+          gcc -O2 -static -pthread -o sb sb.c
+          grep -m1 -i '^features' /proc/cpuinfo
+          ./sb 200
 
-      - name: 'Run them in an emulated Linux aarch64 virtual machine'
+      # anyvm finds QEMU on PATH, and /usr/local/bin comes before /usr/bin,
+      # where the VM action's apt-get puts it.  anyvm makes the Ubuntu guest
+      # a cortex-a72; the wrapper gives it the CPU of this job.
+      - name: 'Put the CPU of this job in front of QEMU'
+        run: |
+          sudo tee /usr/local/bin/qemu-system-aarch64 > /dev/null <<'W'
+          #!/bin/bash
+          args=()
+          while [ $# -gt 0 ]; do
+            if [ "$1" = -cpu ] && [ "$2" != help ]; then
+              args+=(-cpu '${{ matrix.cpu-type }}')
+              shift 2
+            else
+              args+=("$1")
+              shift
+            fi
+          done
+          echo "${args[*]}" >> /tmp/qemu-command-lines.txt
+          exec /usr/bin/qemu-system-aarch64 "${args[@]}"
+          W
+          sudo chmod 755 /usr/local/bin/qemu-system-aarch64
+
+      - name: 'Run it in an emulated Linux aarch64 virtual machine'
         uses: vmactions/ubuntu-vm@v1
         with:
           release: '24.04'
@@ -259,4 +193,14 @@ jobs:
           mem: 8192
           cpu: 4
           copyback: false
-          run: sh repro/run.sh
+          run: |
+            uname -a
+            nproc
+            grep -m1 -i '^features' /proc/cpuinfo
+            ./sb 200
+
+      - name: 'Show the QEMU command line the guest ran with'
+        if: always()
+        run: |
+          /usr/bin/qemu-system-aarch64 --version | head -1
+          cat /tmp/qemu-command-lines.txt
