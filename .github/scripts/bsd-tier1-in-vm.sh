@@ -251,49 +251,21 @@ fi
 case `uname -m` in
   arm64|aarch64|evbarm)
     # The aarch64 guests run under QEMU without acceleration -- the arm
-    # runners have no /dev/kvm -- and on all three BSDs the same tests stop
-    # making progress there and run into their timeouts, while the x86_64
-    # guests of the same BSDs pass them:
-    #   JSR166TestCase: "ForkJoin common pool thread stuck", 120s per case
-    #   ParkALot: "=> 1631 of 300000" for four hours, Thread-1 in yield0
-    #   NotifiedThenTimedOutWait, MiscMonitorTests waitNotifyTest,
-    #   both Starvation tests, StructuredTaskScopeTest,
-    #   LotsOfContendedMonitorEnter, GetStackTrace*StressTest,
-    #   MonitorEnterExit#Xcomp (testMutualExclusion, every ForkJoinPool
-    #   worker parked in awaitWork), forkjoin/SubmissionTest ("Submitted
-    #   task failed to execute"), GatherersMapConcurrentTest,
-    #   MonitorWaitNotify#Xcomp-noTieredCompilation, and in the virtual
-    #   thread stress directory PingPong#ltq, TimedWaitALot and whatever runs
-    #   after GetStackTraceALotWithTimedWait, which stalled jdk part 1 shard 4
-    #   for four hours on FreeBSD, NetBSD and OpenBSD alike,
-    #   CancelTimerWithContention (96 minutes, NetBSD) and
-    #   Exchanger/ExchangeLoops (24 minutes, OpenBSD),
-    #   and five jshell tests whose execution engine does not attach over JDI
-    #   in time: "Failed remote listen: ... TransportTimeoutException:
-    #   timeout waiting for connection", then "Failed remote launch:
-    #   java.util.concurrent.TimeoutException",
-    #   and tools/javac/file/zip/T6836682, which writes a jar past 4 GB and
-    #   ran out of 1440 seconds on FreeBSD, as did java/foreign/
-    #   TestUpcallStress, still finishing a case a second at case 712
-    # One of them is enough to take a shard past the six-hour job limit,
-    # and the rest of its tests with it.  The emulation is to blame:
-    # .github/workflows/aarch64-probe.yml ran them on Linux aarch64, built
-    # from this tree, in an Ubuntu guest booted the same way on the same
-    # runner, and they stalled there the same way.  ParkALot stopped at
-    # "=> 9362 of 300000" for four hours with every ForkJoinPool worker
-    # parked in awaitWork, JSR166TestCase failed case after case with
-    # "ForkJoin common pool thread stuck", SubmissionTest with "Submitted
-    # task failed to execute", and PingPong#ltq, forkjoin/Starvation,
-    # GatherersMapConcurrentTest and CancelTimerWithContention ran into
-    # their timeouts with work queued and no worker running it.  No QEMU
-    # setting the probe tried keeps them going on four CPUs: not -cpu max,
-    # whose LSE atomics make CAS one instruction, and not QEMU 11.1.2 in
-    # place of the runner's 8.2.2.  With one CPU ParkALot, PingPong and
-    # SubmissionTest pass, and Starvation, GatherersMapConcurrentTest and
-    # CancelTimerWithContention still run out of time.  Leave them out
-    # here so that the rest is tested.
+    # runners have no /dev/kvm -- and two tests that only take long run out
+    # of their time there: tools/javac/file/zip/T6836682, which writes a
+    # jar past 4 GB, ran out of 1440 seconds on FreeBSD, as did java/foreign/
+    # TestUpcallStress, still finishing a case a second at case 712.  Either
+    # is enough to take a shard past the six-hour job limit, and the rest of
+    # its tests with it.
+    #
+    # Some twenty more, most of them ForkJoinPool and virtual thread tests,
+    # used to stall outright here, with tasks queued and every worker
+    # parked in awaitWork.  That was QEMU letting a Load-Acquire pass an earlier
+    # Store-Release; the guests now run under a QEMU built with that fixed
+    # (see the qemu job in bsd-all.yml), and those tests are no longer left
+    # out.
     if [ -s "$PWD/shard-tests.txt" ]; then
-      grep -E '(JSR166TestCase|ParkALot|NotifiedThenTimedOutWait|MiscMonitorTests|Starvation|StructuredTaskScopeTest|LotsOfContendedMonitorEnter|GetStackTrace[A-Za-z]*StressTest|MonitorEnterExit|MonitorWaitNotify|CancelTimerWithContention|Thread/virtual/stress/[A-Za-z0-9]*|forkjoin/SubmissionTest|GatherersMapConcurrentTest|Exchanger/ExchangeLoops|jshell/ToolProviderTest|jshell/MultipleDocumentationTest|jshell/JdiFailingLaunchExecutionControlTest|jshell/ToolTabSnippetTest|jshell/JdiStarterTest|javac/file/zip/T6836682|foreign/TestUpcallStress)\.java' \
+      grep -E '(javac/file/zip/T6836682|foreign/TestUpcallStress)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
     fi
     # gc/epsilon/TestInitAllocs starts 500 JVMs one after another, in each
