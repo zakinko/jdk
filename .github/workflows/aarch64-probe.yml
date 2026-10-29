@@ -19,12 +19,17 @@
 # fresh ForkJoinPool(1), and a C program handing a token over through a
 # mutex and condition variable, never stall.  C2's code is what stalls.
 #
-# This narrows that down with the park/unpark program alone: the
-# instruction C2 gives Thread.onSpinWait(), the merging of dmb
-# instructions, the instruction cache invalidation, and which classes
-# C2 compiles -- ForkJoinPool, VirtualThread, Continuation, LockSupport
-# and Unsafe, Thread, or the program's own -- each left to the
-# interpreter in turn.
+# With the park/unpark program alone, keeping ForkJoinPool's classes out
+# of the compilers made it run to the end in both rounds; changing the
+# instruction C2 gives Thread.onSpinWait(), leaving dmb instructions
+# unmerged, and keeping VirtualThread, Continuation, LockSupport with
+# Unsafe, Thread or the program's own classes out did not.
+#
+# This narrows it down to ForkJoinPool's methods: each of signalWork,
+# deactivate, awaitWork, runWorker, WorkQueue.push, all of WorkQueue, and
+# the submission path is kept out of the compilers and out of other
+# methods' inlined code in turn; and, last, all of ForkJoinPool is
+# compiled but nothing of it inlined.
 #
 name: 'aarch64 emulation probe'
 
@@ -220,17 +225,14 @@ jobs:
           grep -m1 -i '^features' /proc/cpuinfo
           cat > repro/variants <<'V'
           default
-          -XX:TieredStopAtLevel=1
-          -XX:+UnlockDiagnosticVMOptions -XX:OnSpinWaitInst=none
-          -XX:+UnlockDiagnosticVMOptions -XX:OnSpinWaitInst=isb
-          -XX:+UnlockDiagnosticVMOptions -XX:-AlwaysMergeDMB
-          -XX:+UnlockDiagnosticVMOptions -XX:+UseSingleICacheInvalidation
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool*::*
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.lang.VirtualThread*::*
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,jdk.internal.vm.Continuation*::*
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.locks.LockSupport::* -XX:CompileCommand=exclude,jdk.internal.misc.Unsafe::*
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.lang.Thread::*
-          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,Repro*::*
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::signalWork -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::signalWork
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::deactivate -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::deactivate
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::awaitWork -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::awaitWork
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::runWorker -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::runWorker
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool$WorkQueue::push -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool$WorkQueue::push
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool$WorkQueue::* -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool$WorkQueue::*
+          -XX:CompileCommand=quiet -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::poolSubmit -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::poolSubmit -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::externalSubmit -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::externalSubmit -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::lazySubmit -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::lazySubmit -XX:CompileCommand=exclude,java.util.concurrent.ForkJoinPool::submissionQueue -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool::submissionQueue
+          -XX:CompileCommand=quiet -XX:CompileCommand=dontinline,java.util.concurrent.ForkJoinPool*::*
           V
           for round in 1 2; do
             while read -r opts; do
