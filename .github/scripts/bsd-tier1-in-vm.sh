@@ -256,7 +256,13 @@ case `uname -m` in
     # jar past 4 GB, ran out of 1440 seconds on FreeBSD, as did java/foreign/
     # TestUpcallStress, still finishing a case a second at case 712.  Either
     # is enough to take a shard past the six-hour job limit, and the rest of
-    # its tests with it.
+    # its tests with it.  jdk/jshell/ToolTabSnippetTest waits for jshell's
+    # tab completion to list the classes it knows, and on FreeBSD the list
+    # was still coming after its 60 seconds times twelve:
+    #   java.lang.IllegalStateException: Timeout waiting for:
+    #   .*String.*StringBuilder.*..., actual output so far: ... AbstractMethodError ...
+    #   FAILED     ToolTabSnippetTest::testExpression '[1] false' [736511ms]
+    # In an emulated Linux aarch64 guest the same case took 36 minutes.
     #
     # Some twenty more, most of them ForkJoinPool and virtual thread tests,
     # used to stall outright here, with tasks queued and every worker
@@ -265,7 +271,7 @@ case `uname -m` in
     # (see the qemu job in bsd-all.yml), and those tests are no longer left
     # out.
     if [ -s "$PWD/shard-tests.txt" ]; then
-      grep -E '(javac/file/zip/T6836682|foreign/TestUpcallStress)\.java' \
+      grep -E '(javac/file/zip/T6836682|foreign/TestUpcallStress|jshell/ToolTabSnippetTest)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
     fi
     # gc/epsilon/TestInitAllocs starts 500 JVMs one after another, in each
