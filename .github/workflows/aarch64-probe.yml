@@ -2,27 +2,23 @@
 # The aarch64 BSD guests leave out a set of tests that stop making progress
 # there (see the list in .github/scripts/bsd-tier1-in-vm.sh): tasks queued
 # in a ForkJoinPool while every worker stays parked in awaitWork.  Earlier
-# versions of this workflow narrowed that down: Linux aarch64 stalls the
-# same way in the same emulated guest but not on the arm runner itself;
-# it stalls when C2 compiles ForkJoinPool, and not with -Xint or C1 alone;
-# and keeping any one of ForkJoinPool.signalWork, ForkJoinPool.deactivate
-# or WorkQueue.push out of C2 is enough for it to run to the end.  Those
-# three are the two sides of ForkJoinPool's handshake: the submitter
-# stores a task and then reads ctl to see whether a worker is idle, the
-# worker CASes itself onto ctl as idle and then reads the queues with
-# plain loads.  One of them must see the other's store.
+# versions of this workflow traced that to QEMU.  Linux aarch64 stalls the
+# same way in the emulated guest, only when C2 compiles ForkJoinPool's
+# handshake (signalWork, deactivate, WorkQueue.push), and the
+# store-buffering litmus test shows why: in the guest, a Store-Release
+# followed by a Load-Acquire (stlr;ldar) let the load go first 3007 and
+# 3355 times in 4000000, as max and as cortex-a72, where the architecture
+# forbids it and the arm runner never did.  C2 makes a volatile store an
+# stlr and a volatile load an ldar with nothing between them, relying on
+# that order; C1 and the interpreter put a dmb after a volatile store.
 #
-# Without the ARMv8.1 atomics C2 makes a CAS an ldaxr/stlxr loop with
-# no barrier after it: the stlxr is a release, which orders earlier
-# accesses before the store, but nothing orders the plain loads that
-# follow after it.  The emulated guest is a cortex-a72, without them;
-# the arm runner has them, so there C2 uses casal.
-#
-# This runs the store-buffering litmus test once more, on the runner and
-# in the emulated guest, as cortex-a72 and as max, with a CAS followed by
-# a plain load: ldaxr/stlxr;ldr, the same with dmb ish before the load,
-# and casal;ldr.  Both loads seeing 0 means the load went before the
-# CAS's store.
+# QEMU's translate-a64.c gives an stlr its barrier before the store and an
+# ldar its barrier after the load, so between the two there is none, and
+# the host is free to let the load pass the store.  The same holds from
+# 8.2.2 to 11.1.2.  This builds QEMU 11.1.2 with a barrier before every
+# load-acquire as well (ldar, and ldaxr and ldaxp), boots the same guest
+# under it, and runs there the litmus test, the cut-down park/unpark and
+# submission programs, and the six tests that stalled soonest.
 #
 name: 'aarch64 emulation probe'
 
@@ -35,20 +31,65 @@ on:
   workflow_dispatch:
 
 jobs:
-  litmus:
-    name: litmus (guest as ${{ matrix.cpu-type }})
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 120
+  jtreg:
+    name: jtreg
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 'Checkout the scripts'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: |
+            .github
+            make/conf/github-actions.conf
 
-    strategy:
-      fail-fast: false
-      matrix:
-        cpu-type: [cortex-a72, max]
+      - name: 'Build JTReg'
+        uses: ./.github/actions/build-jtreg
+
+  build:
+    name: linux-aarch64
+    needs: jtreg
+    uses: ./.github/workflows/build-linux.yml
+    with:
+      platform: linux-aarch64
+      runs-on: 'ubuntu-24.04-arm'
+      bootjdk-platform: linux-aarch64
+      gcc-major-version: '14'
+      debug-levels: '[ "release" ]'
+
+  probe:
+    name: probe (QEMU 11.1.2 with the load-acquire barrier)
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 350
+
+    env:
+      PROBE_TESTS: >-
+        test/jdk/java/lang/Thread/virtual/stress/ParkALot.java
+        test/jdk/java/lang/Thread/virtual/stress/PingPong.java
+        test/jdk/java/util/concurrent/forkjoin/SubmissionTest.java
+        test/jdk/java/util/concurrent/forkjoin/Starvation.java
+        test/jdk/java/util/stream/GatherersMapConcurrentTest.java
+        test/jdk/java/lang/Thread/virtual/CancelTimerWithContention.java
 
     steps:
-      - name: 'Write the litmus test'
+      - name: 'Checkout the JDK source'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: 'Get JTReg'
+        uses: ./.github/actions/get-jtreg
+
+      - name: 'Get bundles'
+        uses: ./.github/actions/get-bundles
+        with:
+          platform: linux-aarch64
+
+      - name: 'Leave the symbols and the archives out of the guest'
+        run: rm -rf bundles/symbols bundles/*.tar.gz
+
+      - name: 'Write the programs'
         run: |
-          cat > sb.c <<'C'
+          mkdir -p probe
+          cat > probe/sb.c <<'C'
           /*
            * Store buffering: each thread stores 1 to its own variable, then loads
            * the other's.  r0 == 0 && r1 == 0 together means a store was ordered
@@ -156,36 +197,190 @@ jobs:
             return 0;
           }
           C
+          cat > probe/Repro.java <<'J'
+          import java.util.concurrent.CountDownLatch;
+          import java.util.concurrent.ForkJoinPool;
+          import java.util.concurrent.TimeUnit;
+          import java.util.concurrent.atomic.AtomicInteger;
+          import java.util.concurrent.locks.LockSupport;
 
-      - name: 'Build it and run it on the runner'
-        run: |
-          gcc -O2 -static -pthread -o sb sb.c
+          /**
+           * The two stalls the emulated aarch64 guest shows, cut down to nothing but
+           * the JDK.  Prints PASS or STALL and exits.
+           *   parkalot N   a virtual thread parks N times, a platform thread unparks
+           *                it each time it waits (ParkALot with one thread)
+           *   submit N     N times: a task handed to a fresh ForkJoinPool(1) must run
+           *                within 60 seconds (SubmissionTest)
+           */
+          public class Repro {
+              public static void main(String[] args) throws Exception {
+                  int n = Integer.parseInt(args[1]);
+                  boolean ok = switch (args[0]) {
+                      case "parkalot" -> parkALot(n);
+                      case "submit" -> submit(n);
+                      default -> throw new IllegalArgumentException(args[0]);
+                  };
+                  System.out.println(ok ? "PASS" : "STALL");
+                  System.exit(ok ? 0 : 1);
+              }
+
+              static boolean parkALot(int n) throws Exception {
+                  AtomicInteger done = new AtomicInteger();
+                  Thread vthread = Thread.ofVirtual().start(() -> {
+                      boolean timed = false;
+                      for (int i = 0; i < n; i++) {
+                          if (timed) LockSupport.parkNanos(Long.MAX_VALUE); else LockSupport.park();
+                          timed = !timed;
+                          done.incrementAndGet();
+                      }
+                  });
+                  Thread unparker = Thread.ofPlatform().daemon().start(() -> {
+                      Thread.State s;
+                      while ((s = vthread.getState()) != Thread.State.TERMINATED) {
+                          if (s == Thread.State.WAITING || s == Thread.State.TIMED_WAITING) {
+                              LockSupport.unpark(vthread);
+                          } else {
+                              Thread.yield();
+                          }
+                      }
+                  });
+                  int last = -1;
+                  long stuckSince = System.nanoTime();
+                  while (!vthread.join(java.time.Duration.ofSeconds(1))) {
+                      int d = done.get();
+                      if (d != last) {
+                          last = d;
+                          stuckSince = System.nanoTime();
+                      } else if (System.nanoTime() - stuckSince > TimeUnit.SECONDS.toNanos(60)) {
+                          System.out.println("no progress for 60s at " + d + " of " + n
+                                  + ", virtual thread " + vthread.getState());
+                          return false;
+                      }
+                  }
+                  System.out.println(done.get() + " of " + n);
+                  return true;
+              }
+
+              static boolean submit(int n) throws Exception {
+                  for (int i = 0; i < n; i++) {
+                      ForkJoinPool pool = new ForkJoinPool(1);
+                      CountDownLatch ran = new CountDownLatch(1);
+                      pool.execute(ran::countDown);
+                      boolean ok = ran.await(60, TimeUnit.SECONDS);
+                      pool.shutdownNow();
+                      if (!ok) {
+                          System.out.println("task " + i + " of " + n + " did not run in 60s; pool: " + pool);
+                          return false;
+                      }
+                  }
+                  System.out.println(n + " of " + n);
+                  return true;
+              }
+          }
+          J
+          cat > probe/ldar.patch <<'P'
+          --- a/target/arm/tcg/translate-a64.c
+          +++ b/target/arm/tcg/translate-a64.c
+          @@ -3642,6 +3642,9 @@
+               if (a->rn == 31) {
+                   gen_check_sp_alignment(s);
+               }
+          +    if (a->lasr) {
+          +        tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
+          +    }
+               gen_load_exclusive(s, a->rt, a->rt2, a->rn, a->sz, false);
+               if (a->lasr) {
+                   tcg_gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
+          @@ -3689,6 +3692,12 @@
+               if (a->rn == 31) {
+                   gen_check_sp_alignment(s);
+               }
+          +    /*
+          +     * A Load-Acquire is ordered after any earlier Store-Release (the
+          +     * acquire is RCsc), and the barrier the store-release gets goes in
+          +     * before its store, so one is needed here as well.
+          +     */
+          +    tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
+               memop = check_ordered_align(s, a->rn, 0, false, a->sz);
+               clean_addr = gen_mte_check1(s, cpu_reg_sp(s, a->rn),
+                                           false, a->rn != 31, memop);
+          @@ -3715,6 +3724,9 @@
+               if (a->rn == 31) {
+                   gen_check_sp_alignment(s);
+               }
+          +    if (a->lasr) {
+          +        tcg_gen_mb(TCG_MO_ALL | TCG_BAR_SC);
+          +    }
+               gen_load_exclusive(s, a->rt, a->rt2, a->rn, a->sz, true);
+               if (a->lasr) {
+                   tcg_gen_mb(TCG_MO_ALL | TCG_BAR_LDAQ);
+          P
+          cat > probe/run.sh <<'S'
+          JDK="$PWD/bundles/jdk/`ls bundles/jdk`"
+          TESTS="$PWD/bundles/tests"
+          JT="$PWD/jtreg/installed"
+          uname -a
+          nproc
           grep -m1 -i '^features' /proc/cpuinfo
-          ./sb 200
+          ./probe/sb 200
+          for round in 1 2; do
+            for t in "parkalot 100000" "submit 300"; do
+              start=`date +%s`
+              out=`timeout 1200 "$JDK/bin/java" -cp probe Repro $t 2>&1 < /dev/null | tail -2 | tr '\n' ' '`
+              end=`date +%s`
+              echo "round $round | $t | $((end - start))s | $out"
+            done
+          done
+          rc=0
+          "$JDK/bin/java" -jar "$JT/lib/jtreg.jar" -jdk:"$JDK" -agentvm \
+            -conc:4 -timeoutFactor:4 -verbose:fail,error,time \
+            -javaoption:-XX:-CreateCoredumpOnCrash \
+            -nativepath:"$TESTS/jdk/jtreg/native" \
+            -w work -r report $PROBE_TESTS > jtreg.log 2>&1 || rc=$?
+          echo "jtreg exited with $rc"
+          find work -name '*.jtr' | sort | while read -r f; do
+            echo "== $f"
+            grep -E '^(elapsed|test result:)' "$f"
+            grep -E '=> [0-9]+ of [0-9]+|T1 [0-9]+ of [0-9]+' "$f" | tail -1
+            grep -E 'awaitWork|Submitted task failed' "$f" | sort | uniq -c | head -3
+          done
+          cat report/text/summary.txt || :
+          S
+
+      - name: 'Build the programs and run them on the runner'
+        run: |
+          gcc -O2 -static -pthread -o probe/sb probe/sb.c
+          "bundles/jdk/`ls bundles/jdk`/bin/javac" -d probe probe/Repro.java
+          ./probe/sb 200
+
+      - name: 'Build QEMU 11.1.2 with the load-acquire barrier'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ninja-build \
+            libglib2.0-dev libpixman-1-dev libslirp-dev python3-venv flex bison
+          curl -sSfL https://download.qemu.org/qemu-11.1.2.tar.xz | tar -xJf -
+          cd qemu-11.1.2
+          patch -p1 < ../probe/ldar.patch
+          ./configure --prefix=/opt/qemu --target-list=aarch64-softmmu \
+            --enable-slirp --disable-docs --disable-werror
+          make -j"$(nproc)" > ../qemu-build.log 2>&1 || { tail -50 ../qemu-build.log; exit 1; }
+          sudo make install > /dev/null
+          cd ..
+          rm -rf qemu-11.1.2
+          /opt/qemu/bin/qemu-system-aarch64 --version
 
       # anyvm finds QEMU on PATH, and /usr/local/bin comes before /usr/bin,
-      # where the VM action's apt-get puts it.  anyvm makes the Ubuntu guest
-      # a cortex-a72; the wrapper gives it the CPU of this job.
-      - name: 'Put the CPU of this job in front of QEMU'
+      # where the VM action's apt-get puts the runner's.
+      - name: "Put the patched QEMU in front of the runner's"
         run: |
           sudo tee /usr/local/bin/qemu-system-aarch64 > /dev/null <<'W'
-          #!/bin/bash
-          args=()
-          while [ $# -gt 0 ]; do
-            if [ "$1" = -cpu ] && [ "$2" != help ]; then
-              args+=(-cpu '${{ matrix.cpu-type }}')
-              shift 2
-            else
-              args+=("$1")
-              shift
-            fi
-          done
-          echo "${args[*]}" >> /tmp/qemu-command-lines.txt
-          exec /usr/bin/qemu-system-aarch64 "${args[@]}"
+          #!/bin/sh
+          echo "$*" >> /tmp/qemu-command-lines.txt
+          exec /opt/qemu/bin/qemu-system-aarch64 "$@"
           W
           sudo chmod 755 /usr/local/bin/qemu-system-aarch64
 
-      - name: 'Run it in an emulated Linux aarch64 virtual machine'
+      - name: 'Run them in the emulated Linux aarch64 virtual machine'
         uses: vmactions/ubuntu-vm@v1
         with:
           release: '24.04'
@@ -193,14 +388,9 @@ jobs:
           mem: 8192
           cpu: 4
           copyback: false
-          run: |
-            uname -a
-            nproc
-            grep -m1 -i '^features' /proc/cpuinfo
-            ./sb 200
+          envs: 'PROBE_TESTS'
+          run: sh probe/run.sh
 
       - name: 'Show the QEMU command line the guest ran with'
         if: always()
-        run: |
-          /usr/bin/qemu-system-aarch64 --version | head -1
-          cat /tmp/qemu-command-lines.txt
+        run: cat /tmp/qemu-command-lines.txt
