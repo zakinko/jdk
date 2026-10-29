@@ -263,15 +263,25 @@ case `uname -m` in
     #   .*String.*StringBuilder.*..., actual output so far: ... AbstractMethodError ...
     #   FAILED     ToolTabSnippetTest::testExpression '[1] false' [736511ms]
     # In an emulated Linux aarch64 guest the same case took 36 minutes.
+    # Four more jshell tests start their execution engine in a second JVM
+    # and wait for it to connect over JDI for jshell's fixed 5000 ms
+    # (JdiExecutionControlProvider.DEFAULT_TIMEOUT), which the timeout
+    # factor does not stretch; an emulated JVM is not always up by then:
+    #   Failed remote listen: java.util.concurrent.ExecutionException:
+    #   com.sun.jdi.connect.TransportTimeoutException: timeout waiting for
+    #   connection @ com.sun.jdi.SocketListen ... {timeout=timeout=5000, ...}
+    # MultipleDocumentationTest did so on OpenBSD with the fixed QEMU; it
+    # and the other three did on all three BSDs before.
     #
     # Some twenty more, most of them ForkJoinPool and virtual thread tests,
     # used to stall outright here, with tasks queued and every worker
     # parked in awaitWork.  That was QEMU letting a Load-Acquire pass an earlier
     # Store-Release; the guests now run under a QEMU built with that fixed
     # (see the qemu job in bsd-all.yml), and those tests are no longer left
-    # out.
+    # out.  The jshell ones above were among them, but they also wait on a
+    # timer nothing scales, so they stay out.
     if [ -s "$PWD/shard-tests.txt" ]; then
-      grep -E '(javac/file/zip/T6836682|foreign/TestUpcallStress|jshell/ToolTabSnippetTest)\.java' \
+      grep -E '(javac/file/zip/T6836682|foreign/TestUpcallStress|jshell/ToolTabSnippetTest|jshell/MultipleDocumentationTest|jshell/ToolProviderTest|jshell/JdiFailingLaunchExecutionControlTest|jshell/JdiStarterTest)\.java' \
           "$PWD/shard-tests.txt" | sed 's/$/ 0000000 generic-all/' >> "$PWD/extra-problems.txt" || :
     fi
     # gc/epsilon/TestInitAllocs starts 500 JVMs one after another, in each
